@@ -17,7 +17,7 @@ sprs = "0.11.4"
 itertools = "0.14"
 
 [dev-dependencies]
-anndata-hdf5 = { version = "0.5.3", path = "../anndata-hdf5" }
+anndata-hdf5 = { version = "0.6.0", path = "../anndata-hdf5" }
 anndata-zarr = { version = "0.2.0", path = "../anndata-zarr" }
 tempfile = "3.2"
 proptest = "1"

@@ -307,7 +307,7 @@ impl Readable for ArrayData {
                     .map(ArrayData::CscMatrix)
             }
             DataType::DataFrame => DataFrame::read(container).map(ArrayData::DataFrame),
-            ty => bail!("Cannot read type '{:?}' as matrix data", ty),
+            ty => bail!("Cannot read type '{ty:?}' as matrix data"),
         }
     }
 }
@@ -463,7 +463,7 @@ impl ReadableArray for ArrayData {
             DataType::CsrMatrix(_, _) => DynIndSparseMatrix::get_shape(container),
             DataType::CscMatrix(_, _) => DynIndSparseMatrix::get_shape(container),
             DataType::DataFrame => DataFrame::get_shape(container),
-            ty => bail!("Cannot read shape information from type '{}'", ty),
+            ty => bail!("Cannot read shape information from type '{ty}'"),
         }
     }
 
@@ -485,7 +485,7 @@ impl ReadableArray for ArrayData {
             DataType::DataFrame => {
                 DataFrame::read_select(container, info).map(ArrayData::DataFrame)
             }
-            ty => bail!("Cannot read type '{:?}' as matrix data", ty),
+            ty => bail!("Cannot read type '{ty:?}' as matrix data"),
         }
     }
 }

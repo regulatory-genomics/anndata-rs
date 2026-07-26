@@ -229,7 +229,7 @@ impl GroupOp<Zarr> for ZarrStore {
 
     /// Check if a group or dataset exists.
     fn exists(&self, name: &str) -> Result<bool> {
-        let path = format!("/{}", name);
+        let path = format!("/{name}");
         Ok(zarrs::node::node_exists(
             &self.inner,
             &path.as_str().try_into()?,
@@ -361,7 +361,7 @@ impl AttributeOp<Zarr> for ZarrGroup {
             .attributes()
             .get(name)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Attribute {} not found", name))
+            .ok_or_else(|| anyhow::anyhow!("Attribute {name} not found"))
     }
 }
 
@@ -394,7 +394,7 @@ impl DatasetOp<Zarr> for ZarrDataset {
         } else if name.contains("string") {
             Ok(ScalarType::String)
         } else {
-            bail!("Unsupported data type: {}", name)
+            bail!("Unsupported data type: {name}")
         }
     }
 
@@ -549,7 +549,7 @@ impl AttributeOp<Zarr> for ZarrDataset {
             .attributes()
             .get(name)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Attribute {} not found", name))
+            .ok_or_else(|| anyhow::anyhow!("Attribute {name} not found"))
     }
 }
 
@@ -601,7 +601,7 @@ fn canoincalize_path<'a>(path: &'a str) -> Cow<'a, str> {
     if path.starts_with("/") {
         path.into()
     } else {
-        format!("/{}", path).into()
+        format!("/{path}").into()
     }
 }
 

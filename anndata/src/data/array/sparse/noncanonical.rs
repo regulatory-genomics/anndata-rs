@@ -762,7 +762,7 @@ impl<N: ToPrimitive + Clone, I: sprs::SpIndex> ArrayArithmetic for CsrNonCanonic
                 .collect();
             Ok(ndarray::Array1::from_vec(row_sums).into_dyn())
         } else {
-            bail!("Axis {} out of bounds for 2D matrix", axis)
+            bail!("Axis {axis} out of bounds for 2D matrix")
         }
     }
 

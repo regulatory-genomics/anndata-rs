@@ -105,7 +105,7 @@ impl Readable for DataFrame {
                     let name_str = name.as_str();
                     let series_container = DataContainer::<B>::open(group, name_str)?;
                     let mut series = read_series::<B>(&series_container)
-                        .with_context(|| format!("Failed to read series: {}", name_str))?;
+                        .with_context(|| format!("Failed to read series: {name_str}"))?;
                     series.rename(name_str.into());
                     Ok(series.into())
                 })
@@ -184,7 +184,7 @@ impl ReadableArray for DataFrame {
                     .open_dataset(name)
                     .map(DataContainer::Dataset)
                     .and_then(|x| read_series::<B>(&x))
-                    .with_context(|| format!("Failed to read series: {}", name))?;
+                    .with_context(|| format!("Failed to read series: {name}"))?;
 
                 let indices: Vec<u32> = SelectInfoElemBounds::new(&info[0], series.len())
                     .iter()
@@ -277,7 +277,7 @@ impl DataFrameIndex {
                 let end: u64 = dataset.get_attr("end")?;
                 Ok((start as usize..end as usize).into())
             }
-            x => bail!("Unknown index type: {}", x),
+            x => bail!("Unknown index type: {x}"),
         }
     }
 
@@ -407,7 +407,7 @@ fn write_column<B: Backend, G: GroupOp<B>>(
             .iter_str()
             .collect::<CategoricalArray>()
             .write(location, name),
-        other => bail!("Unsupported series data type: {:?}", other),
+        other => bail!("Unsupported series data type: {other:?}"),
     }
 }
 
@@ -424,7 +424,7 @@ fn read_series<B: Backend>(container: &DataContainer<B>) -> Result<Series> {
         }
         crate::backend::DataType::Array(_) => Ok(DynArray::read(container)?.into()),
         crate::backend::DataType::NullableArray => read_nullable(container),
-        _ => bail!("Unsupported data type: {:?}", ty),
+        _ => bail!("Unsupported data type: {ty:?}"),
     }
 }
 

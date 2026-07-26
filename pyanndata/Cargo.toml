@@ -13,7 +13,7 @@ keywords = ["data"]
 
 [dependencies]
 anndata = { version = "0.7.0", path = "../anndata" }
-anndata-hdf5 = { version = "0.5.3", path = "../anndata-hdf5" }
+anndata-hdf5 = { version = "0.6.0", path = "../anndata-hdf5" }
 anyhow = "1.0"
 downcast-rs = "2"
 numpy = "0.27"

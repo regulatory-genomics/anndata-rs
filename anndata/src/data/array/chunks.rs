@@ -715,10 +715,9 @@ impl<N: BackendData + std::fmt::Debug, T: BackendData + SpIndex + num::Integer +
         let (encoding, format) = match format {
             SparseMatrixLayoutE::CSR => ("csr_matrix", "csr"),
             SparseMatrixLayoutE::CSC => ("csc_matrix", "csc"),
-            _ => bail!(
-                "Writing a sparse matrix requires the type to be CSR or CSC, not {:?}",
-                format
-            ),
+            _ => {
+                bail!("Writing a sparse matrix requires the type to be CSR or CSC, not {format:?}")
+            }
         };
 
         let mut group = location.new_group(name)?;

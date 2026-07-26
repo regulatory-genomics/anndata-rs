@@ -290,14 +290,14 @@ impl SelectInfoElem {
         match self {
             SelectInfoElem::Index(index) => index.iter().try_for_each(|i| {
                 if *i >= bound {
-                    bail!("index out of bounds: {} >= {}", i, bound)
+                    bail!("index out of bounds: {i} >= {bound}")
                 } else {
                     Ok(())
                 }
             }),
             SelectInfoElem::Slice(slice) => slice.end.map_or(Ok(()), |end| {
                 if end > bound as isize {
-                    bail!("slice end out of bounds: {} >= {}", end, bound)
+                    bail!("slice end out of bounds: {end} >= {bound}")
                 } else {
                     Ok(())
                 }

@@ -36,8 +36,8 @@ impl Display for DataType {
         match self {
             DataType::Array(t) => write!(f, "Array({t})"),
             DataType::Categorical => write!(f, "Categorical"),
-            DataType::CsrMatrix(t, i) => write!(f, "CsrMatrix({}, {})", t, i),
-            DataType::CscMatrix(t, i) => write!(f, "CscMatrix({}, {})", t, i),
+            DataType::CsrMatrix(t, i) => write!(f, "CsrMatrix({t}, {i})"),
+            DataType::CscMatrix(t, i) => write!(f, "CscMatrix({t}, {i})"),
             DataType::DataFrame => write!(f, "DataFrame"),
             DataType::Scalar(t) => write!(f, "Scalar({t})"),
             DataType::Mapping => write!(f, "Mapping"),

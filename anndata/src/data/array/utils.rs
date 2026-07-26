@@ -408,7 +408,7 @@ where
                     CsrNonCanonical::from_csr_data(nrows, ncols, indptr_u64, indices_u64, data);
                 Ok(csr.into())
             }
-            _ => Err(anyhow!("cannot read csr matrix: {:?}", e)),
+            _ => Err(anyhow!("cannot read csr matrix: {e:?}")),
         },
     }
 }

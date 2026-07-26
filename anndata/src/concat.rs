@@ -396,7 +396,7 @@ fn concat_axis_arrays<A: AxisArraysOp>(
     let size = axis_arrays[0].get(key).unwrap().shape().unwrap()[1];
     axis_arrays.iter().map(move |arr| {
         let arr: ArrayData = arr.get_item(key).unwrap().unwrap();
-        assert_eq!(arr.shape()[1], size, "dimension mismatch for key: {}", key);
+        assert_eq!(arr.shape()[1], size, "dimension mismatch for key: {key}");
         arr
     })
 }

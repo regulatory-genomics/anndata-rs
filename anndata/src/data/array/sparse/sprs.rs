@@ -431,7 +431,7 @@ impl<N: BackendData, T: BackendData + SpIndex + num::FromPrimitive> Readable for
         let is_csr = match encoding.as_str() {
             "csr_matrix" => true,
             "csc_matrix" => false,
-            _ => bail!("Cannot read CSMatI from container of type {}", encoding),
+            _ => bail!("Cannot read CSMatI from container of type {encoding}"),
         };
 
         let shape: Vec<u64> = group.get_attr("shape")?;
@@ -559,14 +559,11 @@ impl<N: BackendData, T: BackendData + SpIndex + ToPrimitive + num::Integer + num
 
                 let res = if runs.is_empty() {
                     if major_axis == 0 {
-                        CsMatI::try_new((0, minor_len), vec![0], Vec::new(), Vec::new()).map_err(
-                            |(_, _, _, e)| anyhow::anyhow!("Cannot read csr matrix {}", e),
-                        )?
+                        CsMatI::try_new((0, minor_len), vec![0], Vec::new(), Vec::new())
+                            .map_err(|(_, _, _, e)| anyhow::anyhow!("Cannot read csr matrix {e}"))?
                     } else {
                         CsMatI::try_new_csc((minor_len, 0), vec![0], Vec::new(), Vec::new())
-                            .map_err(|(_, _, _, e)| {
-                                anyhow::anyhow!("Cannot read csc matrix {}", e)
-                            })?
+                            .map_err(|(_, _, _, e)| anyhow::anyhow!("Cannot read csc matrix {e}"))?
                     }
                 } else {
                     let group = container.as_group()?;
@@ -625,7 +622,7 @@ impl<N: BackendData, T: BackendData + SpIndex + ToPrimitive + num::Integer + num
 
                     if major_axis == 0 {
                         CsMatI::try_new((major_len, minor_len), new_indptr, new_indices, new_data)
-                            .map_err(|(_, _, _, e)| anyhow::anyhow!("Cannot read csr matrix {}", e))?
+                            .map_err(|(_, _, _, e)| anyhow::anyhow!("Cannot read csr matrix {e}"))?
                     } else {
                         CsMatI::try_new_csc(
                             (minor_len, major_len),
@@ -633,7 +630,7 @@ impl<N: BackendData, T: BackendData + SpIndex + ToPrimitive + num::Integer + num
                             new_indices,
                             new_data,
                         )
-                        .map_err(|(_, _, _, e)| anyhow::anyhow!("Cannot read csc matrix {}", e))?
+                        .map_err(|(_, _, _, e)| anyhow::anyhow!("Cannot read csc matrix {e}"))?
                     }
                 };
 
@@ -700,7 +697,7 @@ impl<N: BackendData + ToPrimitive, T: BackendData + SpIndex>
                     .collect();
                 Ok(ndarray::Array1::from_vec(row_sums).into_dyn())
             } else {
-                bail!("Axis {} out of bounds for 2D matrix", axis);
+                bail!("Axis {axis} out of bounds for 2D matrix");
             }
         } else {
             if axis == 0 {
@@ -729,7 +726,7 @@ impl<N: BackendData + ToPrimitive, T: BackendData + SpIndex>
                 }
                 Ok(ndarray::Array1::from_vec(row_sums).into_dyn())
             } else {
-                bail!("Axis {} out of bounds for 2D matrix", axis);
+                bail!("Axis {axis} out of bounds for 2D matrix");
             }
         }
     }
