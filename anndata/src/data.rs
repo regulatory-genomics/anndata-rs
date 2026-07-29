@@ -10,8 +10,6 @@ pub use mapping::*;
 use crate::backend::{Backend, DataContainer, DataType, GroupOp};
 
 use anyhow::{Ok, Result, bail};
-use nalgebra_sparse::csc::CscMatrix;
-use nalgebra_sparse::csr::CsrMatrix;
 use ndarray::{Array, RemoveAxis};
 use polars::frame::DataFrame;
 
@@ -36,9 +34,6 @@ impl From<DataFrame> for Data {
 }
 
 macro_rules! impl_into_data {
-    ($($from_type:ty => $to_type:ident),*) => {
-        $( impl_into_data!($from_type, $to_type); )*
-    };
     ($from_type:ty, $to_type:ident) => {
         impl From<$from_type> for Data {
             fn from(data: $from_type) -> Self {
@@ -50,30 +45,48 @@ macro_rules! impl_into_data {
                 Data::ArrayData(ArrayData::Array(DynArray::$to_type(data.into_dyn())))
             }
         }
-        impl From<CsrMatrix<$from_type>> for Data {
-            fn from(data: CsrMatrix<$from_type>) -> Self {
-                Data::ArrayData(ArrayData::CsrMatrix(DynCsrMatrix::$to_type(data)))
-            }
-        }
-        impl From<CscMatrix<$from_type>> for Data {
-            fn from(data: CscMatrix<$from_type>) -> Self {
-                Data::ArrayData(ArrayData::CscMatrix(DynCscMatrix::$to_type(data)))
+    };
+}
+
+macro_rules! impl_into_data_sparse {
+    ($from_type:ty, $to_type: ident) => {
+        impl From<DynSparseMatrix<$from_type>> for Data {
+            fn from(data: DynSparseMatrix<$from_type>) -> Self {
+                match data.get_sparse_layout() {
+                    SparseMatrixLayoutE::CSR => {
+                        Data::ArrayData(ArrayData::CsrMatrix(DynIndSparseMatrix::$to_type(data)))
+                    }
+                    SparseMatrixLayoutE::CSC => {
+                        Data::ArrayData(ArrayData::CscMatrix(DynIndSparseMatrix::$to_type(data)))
+                    }
+                    _ => panic!("Cannot convert types"),
+                }
             }
         }
     };
 }
 
-impl_into_data!(
-    i8 => I8, i16 => I16, i32 => I32, i64 => I64,
-    u8 => U8, u16 => U16, u32 => U32, u64 => U64,
-    f32 => F32, f64 => F64,
-    bool => Bool, String => String
-);
+impl_into_data_sparse!(i16, I16);
+impl_into_data_sparse!(i32, I32);
+impl_into_data_sparse!(i64, I64);
+impl_into_data_sparse!(u16, U16);
+impl_into_data_sparse!(u32, U32);
+impl_into_data_sparse!(u64, U64);
+
+impl_into_data!(i8, I8);
+impl_into_data!(i16, I16);
+impl_into_data!(i32, I32);
+impl_into_data!(i64, I64);
+impl_into_data!(u8, U8);
+impl_into_data!(u16, U16);
+impl_into_data!(u32, U32);
+impl_into_data!(u64, U64);
+impl_into_data!(f32, F32);
+impl_into_data!(f64, F64);
+impl_into_data!(bool, Bool);
+impl_into_data!(String, String);
 
 macro_rules! impl_into_data2 {
-    ($($from_type:ty => $to_type:ident),*) => {
-        $( impl_into_data2!($from_type, $to_type); )*
-    };
     ($from_type:ty, $to_type:ident) => {
         impl From<$from_type> for Data {
             fn from(data: $from_type) -> Self {
@@ -83,40 +96,39 @@ macro_rules! impl_into_data2 {
     };
 }
 
-impl_into_data2!(DynScalar => Scalar, ArrayData => ArrayData, Mapping => Mapping);
+impl_into_data2!(DynScalar, Scalar);
+impl_into_data2!(ArrayData, ArrayData);
+impl_into_data2!(Mapping, Mapping);
 
 macro_rules! impl_try_from_for_scalar {
-    ($($from:ident => $to:ident),*) => {
-        $( impl_try_from_for_scalar!($from, $to); )*
-    };
-    ($from:ident, $to:ident) => {
-        impl TryFrom<Data> for $to {
-            type Error = anyhow::Error;
-            fn try_from(data: Data) -> Result<Self> {
-                match data {
-                    Data::Scalar(DynScalar::$from(data)) => Ok(data),
-                    _ => bail!("Cannot convert data to {}", stringify!($to)),
+    ($($from:ident, $to:ident), *) => {
+        $(
+            impl TryFrom<Data> for $to {
+                type Error = anyhow::Error;
+                fn try_from(data: Data) -> Result<Self> {
+                    match data {
+                        Data::Scalar(DynScalar::$from(data)) => Ok(data),
+                        _ => bail!("Cannot convert data to {}", stringify!($to)),
+                    }
                 }
             }
-        }
 
-        impl<D: RemoveAxis> TryFrom<Data> for Array<$to, D> {
-            type Error = anyhow::Error;
-            fn try_from(v: Data) -> Result<Self> {
-                match v {
-                    Data::ArrayData(data) => data.try_into(),
-                    _ => bail!("Cannot convert data to {} Array", stringify!($to)),
+            impl<D: RemoveAxis> TryFrom<Data> for Array<$to, D> {
+                type Error = anyhow::Error;
+                fn try_from(v: Data) -> Result<Self> {
+                    match v {
+                        Data::ArrayData(data) => data.try_into(),
+                        _ => bail!("Cannot convert data to {} Array", stringify!($to)),
+                    }
                 }
             }
-        }
+        )*
     };
 }
 
 impl_try_from_for_scalar!(
-    I8 => i8, I16 => i16, I32 => i32, I64 => i64,
-    U8 => u8, U16 => u16, U32 => u32, U64 => u64,
-    F32 => f32, F64 => f64,
-    Bool => bool, String => String
+    I8, i8, I16, i16, I32, i32, I64, i64, U8, u8, U16, u16, U32, u32, U64, u64, F32, f32, F64, f64,
+    Bool, bool, String, String
 );
 
 impl TryFrom<Data> for DataFrame {
@@ -141,9 +153,9 @@ impl TryFrom<Data> for Mapping {
     }
 }
 
-//-----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 // Data traits
-//-----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 
 impl Readable for Data {
     fn read<B: Backend>(container: &DataContainer<B>) -> Result<Self> {
@@ -151,8 +163,8 @@ impl Readable for Data {
             DataType::Categorical
             | DataType::Array(_)
             | DataType::DataFrame
-            | DataType::CscMatrix(_)
-            | DataType::CsrMatrix(_) => ArrayData::read(container).map(|x| x.into()),
+            | DataType::CscMatrix(_, _)
+            | DataType::CsrMatrix(_, _) => ArrayData::read(container).map(|x| x.into()),
             DataType::Scalar(_) => DynScalar::read(container).map(|x| x.into()),
             DataType::Mapping => Mapping::read(container).map(|x| x.into()),
             DataType::NullableArray => bail!("Cannot read NullableArray into Data"),

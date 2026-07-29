@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum DataType {
     Array(ScalarType),
-    CsrMatrix(ScalarType),
-    CscMatrix(ScalarType),
+    CsrMatrix(ScalarType, ScalarType),
+    CscMatrix(ScalarType, ScalarType),
+
     DataFrame,
     Mapping,
     Scalar(ScalarType),
@@ -22,8 +23,8 @@ impl DataType {
     pub fn scalar_type(&self) -> Option<ScalarType> {
         match self {
             DataType::Array(t) => Some(*t),
-            DataType::CsrMatrix(t) => Some(*t),
-            DataType::CscMatrix(t) => Some(*t),
+            DataType::CsrMatrix(t, _) => Some(*t),
+            DataType::CscMatrix(t, _) => Some(*t),
             DataType::Scalar(t) => Some(*t),
             _ => None,
         }
@@ -35,8 +36,8 @@ impl Display for DataType {
         match self {
             DataType::Array(t) => write!(f, "Array({t})"),
             DataType::Categorical => write!(f, "Categorical"),
-            DataType::CsrMatrix(t) => write!(f, "CsrMatrix({t})"),
-            DataType::CscMatrix(t) => write!(f, "CscMatrix({t})"),
+            DataType::CsrMatrix(t, i) => write!(f, "CsrMatrix({t}, {i})"),
+            DataType::CscMatrix(t, i) => write!(f, "CscMatrix({t}, {i})"),
             DataType::DataFrame => write!(f, "DataFrame"),
             DataType::Scalar(t) => write!(f, "Scalar({t})"),
             DataType::Mapping => write!(f, "Mapping"),
@@ -125,7 +126,9 @@ impl Display for ScalarType {
     }
 }
 
-pub trait BackendData: Serialize + for<'a> Deserialize<'a> + Send + Sync + Clone + 'static {
+pub trait BackendData:
+    Serialize + for<'a> Deserialize<'a> + Send + Sync + Clone + std::fmt::Debug + 'static
+{
     /// Type of the data
     const DTYPE: ScalarType;
 

@@ -16,3 +16,16 @@ _autosummary
 
 *.egg-info
 __pycache__
+.venv
+
+tests/data
+data
+test_zarr/*
+test_zarr
+
+t_py
+
+.pi-lens
+
+TODO
+.DS_Store

@@ -1,0 +1,15 @@
+[project]
+name = "anndata-rs-workspace"
+version = "0.0.0"
+description = "uv workspace root for anndata-rs: the anndata_rs bindings and their benchmarks."
+requires-python = ">=3.11,<3.14"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["python", "benchmarks"]
+
+[tool.uv.sources]
+anndata_rs = { workspace = true }

@@ -93,18 +93,20 @@ impl Writable for DataFrame {
 
 impl Readable for DataFrame {
     fn read<B: Backend>(container: &DataContainer<B>) -> Result<Self> {
+        use rayon::prelude::*;
         let shape = DataFrame::get_shape(container)?;
         let columns: Vec<String> = container.get_attr("column-order")?;
+        let group = container.as_group()?;
         Ok(DataFrame::new(
             shape[0],
             columns
-                .into_iter()
+                .into_par_iter()
                 .map(|name| {
-                    let name = name.as_str();
-                    let series_container = DataContainer::<B>::open(container.as_group()?, name)?;
+                    let name_str = name.as_str();
+                    let series_container = DataContainer::<B>::open(group, name_str)?;
                     let mut series = read_series::<B>(&series_container)
-                        .with_context(|| format!("Failed to read series: {name}"))?;
-                    series.rename(name.into());
+                        .with_context(|| format!("Failed to read series: {name_str}"))?;
+                    series.rename(name_str.into());
                     Ok(series.into())
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -354,9 +356,9 @@ where
     }
 }
 
-//-----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 // Helper functions
-//-----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 
 fn write_column<B: Backend, G: GroupOp<B>>(
     series: &Column,

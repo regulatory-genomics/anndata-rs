@@ -416,6 +416,10 @@ impl<B: Backend> InnerArrayElem<B> {
         &self.shape
     }
 
+    pub fn is_cached(&self) -> bool {
+        self.element.is_some()
+    }
+
     pub fn enable_cache(&mut self) {
         self.cache_enabled = true;
     }
@@ -440,6 +444,13 @@ impl<B: Backend> InnerArrayElem<B> {
         }
     }
 
+    pub fn take(&mut self) -> Result<ArrayData> {
+        match self.element.take() {
+            Some(data) => Ok(data),
+            None => ArrayData::read(&self.container),
+        }
+    }
+
     pub(crate) fn save(&mut self, data: ArrayData) -> Result<()> {
         let new = data.overwrite(std::mem::take(&mut self.container))?;
         let _ = std::mem::replace(&mut self.container, new);
@@ -455,7 +466,15 @@ impl<B: Backend> InnerArrayElem<B> {
     where
         S: AsRef<SelectInfoElem>,
     {
-        if selection.as_ref().iter().all(|x| x.as_ref().is_full()) {
+        let ndim = self.shape().ndim();
+        let full = SelectInfoElem::full();
+        if selection
+            .iter()
+            .map(|x| x.as_ref())
+            .chain(std::iter::repeat(&full))
+            .take(ndim)
+            .all(|x| x.is_full())
+        {
             self.data()
         } else {
             match self.element.as_ref() {

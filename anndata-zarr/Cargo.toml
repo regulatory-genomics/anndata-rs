@@ -1,8 +1,8 @@
 [package]
 name = "anndata-zarr"
 version = "0.2.0"
-edition = "2024"
-rust-version = "1.85"
+edition = "2021"
+rust-version = "1.75"
 authors = ["Kai Zhang <kai@kzhang.org>"]
 description = "Zarr backend for the anndata package"
 license = "MIT"
@@ -15,14 +15,20 @@ anndata = { version = "0.7.0", path = "../anndata" }
 serde_json = "1.0"
 anyhow = "1.0"
 ndarray = { version = "0.17", features = ["serde"] }
-zarrs = "0.23.10"
+zarrs = { version = "0.23.10", features = ["ndarray", "sharding", "zstd"] }
+zarrs_storage = "0.4.3"
+zarrs_metadata = "0.7.4"
+zarrs_object_store = "0.6.2"
+object_store = { version = "0.13.2", features = ["aws", "gcp", "azure"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+url = "2.5"
 smallvec = "1.15"
+once_cell = "1.20"
 
 [dev-dependencies]
-tempfile = "3.2"
-proptest = "1"
-rand = "0.9"
 ndarray-rand = "0.16"
+tempfile = "3.2"
+sprs = "0.11.4"
 
 [lints]
 workspace = true

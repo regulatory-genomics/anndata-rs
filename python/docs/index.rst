@@ -1,16 +1,37 @@
-anndata-rs: A Rust port of the AnnData package
-==============================================
+anndata-rs Python bindings
+==========================
 
-This package provides an alternative implementation of the anndata data format.
-Currently only a subset of features are implemented.
+``anndata_rs`` is the Python package for the Rust ``anndata-rs`` backend.
+It provides a backed AnnData API for reading, writing, subsetting, and
+streaming AnnData objects without loading every field into memory.
 
-Key differences:
+The package follows the AnnData data model:
 
-1. AnnData is always opened in backed mode and synced.
-2. All elements are lazily loaded ("zero" memory usage).
-3. No views. Subsetting the AnnData will modify the data inplace or make a copy.
+* ``X``: primary observations × variables matrix, dense or sparse.
+* ``obs`` / ``var``: observation and variable annotations.
+* ``obsm`` / ``varm``: multi-dimensional annotations.
+* ``obsp`` / ``varp``: pairwise annotations.
+* ``layers``: alternative matrices with the same shape as ``X``.
+* ``uns``: unstructured metadata.
 
-For details about the `anndata` specification, please go to:
+Key differences from Python ``anndata``
+---------------------------------------
+
+1. ``AnnData`` is opened in backed mode by default.
+2. Elements are lazily loaded; arrays are read when requested.
+3. Subsetting writes/copies data instead of creating AnnData views.
+4. The current Python package is centered on HDF5/``.h5ad`` workflows. Use
+   the Rust API directly for the full set of Rust backend features, including
+   object-store Zarr workflows.
+
+Package layout note
+-------------------
+
+The user-facing Python package is in the repository's ``python/`` directory and
+is imported as ``anndata_rs``. The ``pyanndata/`` Rust crate contains the internal
+PyO3 implementation used by the package.
+
+For details about the AnnData specification, see
 https://anndata.readthedocs.io/en/latest/.
 
 .. toctree::

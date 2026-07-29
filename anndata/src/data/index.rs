@@ -13,8 +13,9 @@ use std::{collections::HashMap, ops::Range};
 use super::SelectInfoElemBounds;
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Index {
-    Intervals(Box<NamedIntervals>),
+    Intervals(NamedIntervals),
     List(List<String>),
     Range(Range<usize>),
 }
@@ -162,7 +163,7 @@ impl FromIterator<String> for Index {
 
 impl<S: Into<String>> FromIterator<(S, Interval)> for Index {
     fn from_iter<T: IntoIterator<Item = (S, Interval)>>(iter: T) -> Self {
-        Self::Intervals(Box::new(NamedIntervals::from_iter(iter)))
+        Self::Intervals(NamedIntervals::from_iter(iter))
     }
 }
 
@@ -209,7 +210,7 @@ impl NamedIntervals {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.accum_length.is_empty()
+        self.accum_length.len() == 0
     }
 }
 
@@ -260,7 +261,7 @@ impl Interval {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.start >= self.end
     }
 
     fn slice(&self, start: usize, end: usize) -> Self {
@@ -445,10 +446,6 @@ impl VecVecIndex {
     /// The total number of elements
     pub fn len(&self) -> usize {
         *self.0.last().unwrap_or(&0)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 

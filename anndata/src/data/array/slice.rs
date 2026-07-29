@@ -434,9 +434,9 @@ impl<'a> SelectInfoBounds<'a> {
         self.select.len()
     }
 
+    // Convert to a new slice that contains only the unique indices. A mapping for
+    // getting back the original indices is also returned.
     /*
-    /// Convert to a new slice that contain only the unique indices. A mapping for
-    /// getting back the original indices is also returned.
     pub fn to_unique(&self) -> (Self, Self) {
         let out_shape = self.out_shape();
         let (unique, mapping): (Vec<_>, Vec<_>) = self.select.iter().zip(out_shape.as_ref())
@@ -536,8 +536,7 @@ impl<'a> SelectInfoElemBounds<'a> {
         }
     }
 
-    /// Checks if the selection element is empty.
-    #[must_use]
+    /// Returns whether the selection element is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -547,6 +546,16 @@ impl<'a> SelectInfoElemBounds<'a> {
         match self {
             Self::Index(idx) => idx[i],
             Self::Slice(slice) => slice.index(i),
+        }
+    }
+
+    /// Checks whether the selected indices are strictly increasing.
+    ///
+    /// Callers use this to skip re-sorting output that is already ordered.
+    pub fn is_monotonic(&self) -> bool {
+        match self {
+            Self::Index(idx) => idx.windows(2).all(|w| w[0] < w[1]),
+            Self::Slice(slice) => slice.step > 0,
         }
     }
 
@@ -637,9 +646,9 @@ impl SliceBounds {
     }
 
     pub(crate) fn len(&self) -> usize {
-        (self.end - self.start)
-            .checked_div(self.step.unsigned_abs())
-            .unwrap()
+        let step = self.step.unsigned_abs();
+        let span = self.end - self.start;
+        if span == 0 { 0 } else { span.div_ceil(step) }
     }
 
     pub(crate) fn index(&self, i: usize) -> usize {
@@ -727,11 +736,11 @@ fn _unique_indices_sorted(indices: &[usize], upper_bound: usize) -> (Vec<usize>,
 macro_rules! s{
     ( $( $x:expr ),* ) => {
         {
-            $crate::data::SelectInfo(vec![
-                $(
-                    $crate::data::SelectInfoElem::from($x),
-                )*
-            ])
+            let mut temp_vec = Vec::new();
+            $(
+                temp_vec.push($crate::data::SelectInfoElem::from($x));
+            )*
+            $crate::data::SelectInfo(temp_vec)
         }
 
     };

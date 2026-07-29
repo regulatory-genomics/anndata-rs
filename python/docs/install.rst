@@ -1,19 +1,40 @@
 Installation
 ============
 
-You need to install `rust <https://www.rust-lang.org/tools/install>`_ first
-in order to compile the library, which can be accomplished by running:
+From PyPI
+---------
+
+Install the user-facing Python package and import it as ``anndata_rs``:
+
+::
+
+    pip install anndata_rs
+
+::
+
+    import anndata_rs as ad
+
+From source
+-----------
+
+You need a Rust toolchain to compile the extension module. Install Rust with
+``rustup`` if it is not already available:
 
 ::
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-Clone the source code repository and go to the `python` directory,
-use `pip install . --use-feature=in-tree-build` or
-`python setup.py install` to install the package.
+Clone the repository and install from the ``python`` package directory:
 
 ::
 
-    git clone https://github.com/kaizhang/anndata_rs.git
-    cd python
-    pip install . --use-feature=in-tree-build
+    git clone https://github.com/kaizhang/anndata-rs.git
+    cd anndata-rs/python
+    pip install .
+
+Development installs can also use maturin:
+
+::
+
+    cd anndata-rs/python
+    maturin develop

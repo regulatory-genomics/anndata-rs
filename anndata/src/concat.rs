@@ -1,16 +1,15 @@
-use crate::data::utils::{array_major_minor_index_default, cs_major_minor_index2};
-use crate::data::{ArrayData, Data, DataFrameIndex, DynArray, DynCsrMatrix};
+use crate::data::utils::array_major_minor_index_default;
+use crate::data::{ArrayData, Data, DataFrameIndex, DynArray, DynIndSparseMatrix, DynSparseMatrix};
 use crate::{AnnDataOp, ArrayElemOp, AxisArraysOp, ElemCollectionOp, HasShape};
 use anyhow::{Result, ensure};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use log::warn;
-use nalgebra_sparse::csr::CsrMatrix;
-use nalgebra_sparse::pattern::SparsityPattern;
 use polars::chunked_array::builder::CategoricalChunkedBuilder;
 use polars::frame::DataFrame;
 use polars::prelude::{AnyValue, Categorical32Type, Column, DataType, IntoLazy, NamedFrom};
 use polars::series::{IntoSeries, Series};
+use sprs::{CsMatI, SpIndex};
 
 #[derive(Debug, Clone, Copy)]
 pub enum JoinType {
@@ -287,35 +286,89 @@ fn index_array(
     }
 
     macro_rules! fun_csr {
-        ($variant:ident, $value:expr) => {{
-            let (offsets, indices, data) = $value.csr_data();
-            let (new_row_offsets, new_col_indices, new_data) = cs_major_minor_index2(
-                row_indices,
-                col_indices,
-                $value.ncols(),
-                offsets,
-                indices,
-                data,
-            );
-            let pattern = unsafe {
-                SparsityPattern::from_offset_and_indices_unchecked(
-                    row_indices.len(),
-                    col_indices.len(),
-                    new_row_offsets,
-                    new_col_indices,
-                )
-            };
-            CsrMatrix::try_from_pattern_and_values(pattern, new_data)
-                .unwrap()
-                .into()
-        }};
+        ($variant:ident, $value:expr) => {{ DynSparseMatrix::$variant(index_csr(row_indices, col_indices, &$value)) }};
     }
 
     match arr {
         ArrayData::Array(x) => crate::macros::dyn_map!(x, DynArray, fun_array),
-        ArrayData::CsrMatrix(x) => crate::macros::dyn_map!(x, DynCsrMatrix, fun_csr),
+        ArrayData::CsrMatrix(x) => match x {
+            DynIndSparseMatrix::I16(x) => {
+                DynIndSparseMatrix::I16(crate::macros::dyn_map!(x, DynSparseMatrix, fun_csr)).into()
+            }
+            DynIndSparseMatrix::I32(x) => {
+                DynIndSparseMatrix::I32(crate::macros::dyn_map!(x, DynSparseMatrix, fun_csr)).into()
+            }
+            DynIndSparseMatrix::I64(x) => {
+                DynIndSparseMatrix::I64(crate::macros::dyn_map!(x, DynSparseMatrix, fun_csr)).into()
+            }
+            DynIndSparseMatrix::U16(x) => {
+                DynIndSparseMatrix::U16(crate::macros::dyn_map!(x, DynSparseMatrix, fun_csr)).into()
+            }
+            DynIndSparseMatrix::U32(x) => {
+                DynIndSparseMatrix::U32(crate::macros::dyn_map!(x, DynSparseMatrix, fun_csr)).into()
+            }
+            DynIndSparseMatrix::U64(x) => {
+                DynIndSparseMatrix::U64(crate::macros::dyn_map!(x, DynSparseMatrix, fun_csr)).into()
+            }
+        },
         _ => todo!(),
     }
+}
+
+fn index_csr<N: Clone, T: SpIndex>(
+    row_indices: &[Option<usize>],
+    col_indices: &[Option<usize>],
+    matrix: &CsMatI<N, T, u64>,
+) -> CsMatI<N, T, u64> {
+    debug_assert!(matrix.is_csr());
+
+    // Map each source column to its position(s) in the aligned output. Missing
+    // output columns have no source entry and therefore remain all-zero.
+    let mut col_mapping = vec![Vec::new(); matrix.cols()];
+    for (output_col, source_col) in col_indices.iter().enumerate() {
+        if let Some(source_col) = source_col {
+            col_mapping[*source_col].push(output_col);
+        }
+    }
+
+    let matrix_indptr = matrix.indptr();
+    let matrix_indptr = matrix_indptr.as_slice().unwrap();
+    let mut output_indptr = Vec::with_capacity(row_indices.len() + 1);
+    let mut output_indices = Vec::new();
+    let mut output_data = Vec::new();
+    let mut row = Vec::new();
+    output_indptr.push(0);
+
+    for source_row in row_indices {
+        if let Some(source_row) = source_row {
+            let start = matrix_indptr[*source_row] as usize;
+            let end = matrix_indptr[*source_row + 1] as usize;
+            row.clear();
+
+            for i in start..end {
+                let source_col = matrix.indices()[i].to_usize().unwrap();
+                for &output_col in &col_mapping[source_col] {
+                    row.push((output_col, matrix.data()[i].clone()));
+                }
+            }
+
+            // Variable orders may differ between inputs, so restore canonical
+            // CSR ordering after remapping the column indices.
+            row.sort_by_key(|(col, _)| *col);
+            for (col, value) in row.drain(..) {
+                output_indices.push(T::from_usize(col));
+                output_data.push(value);
+            }
+        }
+        output_indptr.push(output_indices.len() as u64);
+    }
+
+    CsMatI::new(
+        (row_indices.len(), col_indices.len()),
+        output_indptr,
+        output_indices,
+        output_data,
+    )
 }
 
 fn concat_x<A: AnnDataOp>(

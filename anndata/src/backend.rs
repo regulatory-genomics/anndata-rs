@@ -164,8 +164,7 @@ pub trait AttributeOp<B: Backend + ?Sized> {
 }
 
 pub trait DatasetOp<B: Backend + ?Sized> {
-    // Required methods
-
+    /// Required methods
     fn dtype(&self) -> Result<ScalarType>;
     fn shape(&self) -> Shape;
     fn reshape(&mut self, shape: &Shape) -> Result<()>;
@@ -181,8 +180,7 @@ pub trait DatasetOp<B: Backend + ?Sized> {
         S: AsRef<SelectInfoElem>,
         D: Dimension;
 
-    // Optional methods
-
+    /// Optional methods
     fn read_dyn_array_slice<S>(&self, selection: &[S]) -> Result<DynArray>
     where
         S: AsRef<SelectInfoElem>,
@@ -339,11 +337,13 @@ impl<B: Backend> DataContainer<B> {
             "array" => DataType::Array(self.as_dataset()?.dtype()?),
             "csc_matrix" => {
                 let ty = self.as_group()?.open_dataset("data")?.dtype()?;
-                DataType::CscMatrix(ty)
+                let tp = self.as_group()?.open_dataset("indices")?.dtype()?;
+                DataType::CscMatrix(ty, tp)
             }
             "csr_matrix" => {
                 let ty = self.as_group()?.open_dataset("data")?.dtype()?;
-                DataType::CsrMatrix(ty)
+                let tp = self.as_group()?.open_dataset("indices")?.dtype()?;
+                DataType::CsrMatrix(ty, tp)
             }
             "dataframe" => DataType::DataFrame,
             "mapping" | "dict" => DataType::Mapping,
@@ -366,13 +366,4 @@ impl<B: Backend> DataContainer<B> {
             _ => bail!("Expecting Dataset"),
         }
     }
-}
-
-pub fn iter_containers<B: Backend>(
-    group: &B::Group,
-) -> impl Iterator<Item = (String, DataContainer<B>)> + '_ {
-    group.list().unwrap().into_iter().map(|x| {
-        let container = DataContainer::open(group, &x).unwrap();
-        (x, container)
-    })
 }

@@ -1,7 +1,8 @@
-use crate::backend::{Backend, DataContainer, DataType, GroupOp, iter_containers};
+use crate::backend::{Backend, DataContainer, DataType, GroupOp};
 use crate::data::{Data, Readable, Writable};
 
 use anyhow::Result;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::ops::Deref;
 
@@ -42,8 +43,14 @@ impl Element for Mapping {
 
 impl Readable for Mapping {
     fn read<B: Backend>(container: &DataContainer<B>) -> Result<Self> {
-        let data: Result<_> = iter_containers::<B>(container.as_group()?)
-            .map(|(k, v)| Ok((k.to_owned(), Data::read(&v)?)))
+        let group = container.as_group()?;
+        let keys = group.list()?;
+        let data: Result<_> = keys
+            .into_par_iter()
+            .map(|k| {
+                let v = DataContainer::open(group, &k)?;
+                Ok((k.to_owned(), Data::read(&v)?))
+            })
             .collect();
         Ok(Mapping(data?))
     }

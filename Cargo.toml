@@ -1,19 +1,19 @@
 [workspace]
 members = [
-    "anndata",
-    "anndata-hdf5",
-    "anndata-zarr",
-    "pyanndata",
-    "anndata-test-utils",
-    "python",
+  "anndata",
+  "anndata-hdf5",
+  "anndata-zarr",
+  "pyanndata",
+  "anndata-test-utils",
+  "python",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 anndata = { path = "anndata" }
 anndata-hdf5 = { path = "anndata-hdf5" }
-anndata-zarr = { path = "anndata-zarr" }
 pyanndata = { path = "pyanndata" }
+anndata-zarr = { path = "anndata-zarr" }
 
 [workspace.lints.clippy]
 # TODO: replace these with `pedantic`

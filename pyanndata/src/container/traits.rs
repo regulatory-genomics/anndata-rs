@@ -30,13 +30,13 @@ pub trait ElemTrait: Send + Sync {
 impl<B: Backend> ElemTrait for Elem<B> {
     fn enable_cache(&self) {
         if let Some(x) = self.lock().as_mut() {
-            x.enable_cache()
+            x.enable_cache();
         }
     }
 
     fn disable_cache(&self) {
         if let Some(x) = self.lock().as_mut() {
-            x.disable_cache()
+            x.disable_cache();
         }
     }
 
@@ -62,6 +62,7 @@ pub trait ArrayElemTrait: Send + Sync {
     fn disable_cache(&self);
     fn show(&self) -> String;
     fn get(&self, subscript: &Bound<'_, PyAny>) -> Result<PyArrayData>;
+    fn take(&self) -> Result<PyArrayData>;
     fn shape(&self) -> Vec<usize>;
     fn chunk(&self, size: usize, replace: bool, seed: u64) -> Result<ArrayData>;
     fn chunked(&self, chunk_size: usize) -> PyChunkedArray;
@@ -70,19 +71,23 @@ pub trait ArrayElemTrait: Send + Sync {
 impl<B: Backend + 'static> ArrayElemTrait for ArrayElem<B> {
     fn enable_cache(&self) {
         if let Some(x) = self.lock().as_mut() {
-            x.enable_cache()
+            x.enable_cache();
         }
     }
 
     fn disable_cache(&self) {
         if let Some(x) = self.lock().as_mut() {
-            x.disable_cache()
+            x.disable_cache();
         }
     }
 
     fn get(&self, subscript: &Bound<'_, PyAny>) -> Result<PyArrayData> {
         let slice = to_select_info(subscript, self.inner().shape())?;
         self.inner().select::<_>(slice.as_ref()).map(|x| x.into())
+    }
+
+    fn take(&self) -> Result<PyArrayData> {
+        self.inner().take().map(|x| x.into())
     }
 
     fn show(&self) -> String {
@@ -124,6 +129,13 @@ impl<B: Backend + 'static> ArrayElemTrait for StackedArrayElem<B> {
         let slice = to_select_info(subscript, self.deref().shape().as_ref().unwrap())?;
         self.select::<ArrayData, _>(slice.as_ref())
             .map(|x| x.unwrap().into())
+    }
+
+    fn take(&self) -> Result<PyArrayData> {
+        self.deref()
+            .data::<ArrayData>()?
+            .context("StackedArrayElem is empty")
+            .map(|x| x.into())
     }
 
     fn show(&self) -> String {

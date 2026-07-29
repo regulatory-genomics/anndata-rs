@@ -84,6 +84,12 @@ impl PyArrayElem {
         self.0.get(subscript)
     }
 
+    /// Take the data from the element.
+    #[pyo3(text_signature = "($self)")]
+    fn take(&self) -> Result<PyArrayData> {
+        self.0.take()
+    }
+
     /// Return a chunk of the matrix with random indices.
     ///
     /// Parameters

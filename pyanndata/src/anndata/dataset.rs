@@ -35,7 +35,7 @@ use super::get_backend;
         The column name in obs to store the keys
     use_abolute_path: bool
         Whether to store absolute paths of the component anndata files.
-    backend: Literal['hdf5', 'zarr']
+    backend: Literal['hdf5']
         The backend to use for the AnnDataSet object.
 
     Note

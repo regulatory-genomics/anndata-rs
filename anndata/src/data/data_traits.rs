@@ -107,9 +107,9 @@ where
     }
 }
 
-//-----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 // Traits for arrays
-//-----------------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////
 
 /// Anything that has a shape.
 pub trait HasShape {
@@ -214,4 +214,18 @@ pub trait ArrayArithmetic: HasShape {
 
     /// Compute the maximum value in the array
     fn max(&self) -> f64;
+}
+
+#[derive(Debug)]
+pub enum SparseMatrixLayoutE {
+    CSR,
+    CSC,
+    COO,
+    NONE,
+}
+
+pub trait SparseMatrixLayout {
+    fn get_sparse_layout(&self) -> SparseMatrixLayoutE {
+        SparseMatrixLayoutE::NONE
+    }
 }

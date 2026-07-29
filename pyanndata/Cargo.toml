@@ -13,12 +13,12 @@ keywords = ["data"]
 
 [dependencies]
 anndata = { version = "0.7.0", path = "../anndata" }
-anndata-hdf5 = { version = "0.5.3", path = "../anndata-hdf5" }
+anndata-hdf5 = { version = "0.6.0", path = "../anndata-hdf5" }
 anyhow = "1.0"
 downcast-rs = "2"
 numpy = "0.27"
 ndarray = "0.17"
-nalgebra-sparse = "0.11"
+sprs = "0.11.4"
 hdf5 = { package = "hdf5-metno", version = "0.12" }
 polars = { version = "0.53", features = ["ndarray"] }
 pyo3-polars = {version = "0.26", features = ["dtype-full", "dtype-struct"] }

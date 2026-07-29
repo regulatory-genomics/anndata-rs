@@ -1,5 +1,9 @@
-use crate::data::{PyArrayData, PyData, isinstance_of_polars, isinstance_of_pyanndata};
+use crate::data::{
+    PyArrayData, PyData, isinstance_of_arr, isinstance_of_csc, isinstance_of_csr,
+    isinstance_of_polars, isinstance_of_pyanndata,
+};
 
+use anndata::backend::{DataType, ScalarType};
 use anndata::data::{ArrayChunk, DataFrameIndex, SelectInfoElem, Shape, Stackable};
 use anndata::{self, ArrayElemOp, ElemCollectionOp, Selectable};
 use anndata::{AnnDataOp, ArrayData, AxisArraysOp, Backend, Data, HasShape};
@@ -127,6 +131,23 @@ impl<'py> PyAnnData<'py> {
 
         Ok(adata)
     }
+
+    pub fn get_x(&self) -> ArrayElem<'py> {
+        self.x()
+    }
+
+    pub fn take_x_py(&self) -> Result<Option<PyArrayData>> {
+        AnnDataOp::take_x::<ArrayData>(self).map(|x| x.map(Into::into))
+    }
+
+    pub fn set_x_py(&self, data: Option<PyArrayData>) -> Result<()> {
+        if let Some(d) = data {
+            self.set_x(d)?;
+        } else {
+            self.del_x()?;
+        }
+        Ok(())
+    }
 }
 
 impl<'py> AnnDataOp for PyAnnData<'py> {
@@ -142,6 +163,14 @@ impl<'py> AnnDataOp for PyAnnData<'py> {
 
     fn x(&self) -> Self::X {
         ArrayElem(self.0.getattr("X").unwrap())
+    }
+
+    fn take_x<D>(&self) -> Result<Option<D>>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        self.x().take()
     }
 
     fn set_x_from_iter<I, D>(&self, iter: I) -> Result<()>
@@ -162,8 +191,7 @@ impl<'py> AnnDataOp for PyAnnData<'py> {
         let shape = data.shape();
         self.set_n_obs(shape[0])?;
         self.set_n_vars(shape[1])?;
-        let ob: ArrayData = data;
-        self.setattr("X", PyArrayData::from(ob))?;
+        self.setattr("X", PyArrayData::from(data))?;
         Ok(())
     }
 
@@ -602,13 +630,48 @@ impl ArrayElemOp for ArrayElem<'_> {
         self.0.is_none()
     }
 
-    fn dtype(&self) -> Option<anndata::backend::DataType> {
-        let dtype: Option<String> = self.0.getattr("dtype").unwrap().extract().unwrap();
-        panic!("{dtype:?}");
+    fn is_cached(&self) -> bool {
+        true
+    }
+
+    fn enable_cache(&self) {}
+    fn disable_cache(&self) {}
+
+    fn dtype(&self) -> Option<DataType> {
+        if self.is_none() {
+            return None;
+        }
+
+        let py_dtype = self.0.getattr("dtype").ok()?;
+        let ty_name = py_dtype.getattr("name").ok()?.extract::<String>().ok()?;
+        let scalar_type = match ty_name.as_str() {
+            "int8" => ScalarType::I8,
+            "int16" => ScalarType::I16,
+            "int32" => ScalarType::I32,
+            "int64" => ScalarType::I64,
+            "uint8" => ScalarType::U8,
+            "uint16" => ScalarType::U16,
+            "uint32" => ScalarType::U32,
+            "uint64" => ScalarType::U64,
+            "float32" => ScalarType::F32,
+            "float64" => ScalarType::F64,
+            "bool" => ScalarType::Bool,
+            _ => return None,
+        };
+
+        if isinstance_of_arr(&self.0).unwrap_or(false) {
+            Some(DataType::Array(scalar_type))
+        } else if isinstance_of_csr(&self.0).unwrap_or(false) {
+            Some(DataType::CsrMatrix(scalar_type, ScalarType::U64))
+        } else if isinstance_of_csc(&self.0).unwrap_or(false) {
+            Some(DataType::CscMatrix(scalar_type, ScalarType::U64))
+        } else {
+            None
+        }
     }
 
     fn shape(&self) -> Option<Shape> {
-        let shape: Vec<usize> = self.0.getattr("shape").unwrap().extract().unwrap();
+        let shape: Vec<usize> = self.0.getattr("shape").ok()?.extract().ok()?;
         Some(shape.into())
     }
 
@@ -619,6 +682,21 @@ impl ArrayElemOp for ArrayElem<'_> {
     {
         let data: Option<ArrayData> = self.0.extract::<Option<PyArrayData>>()?.map(Into::into);
         data.map(|x| x.try_into().map_err(Into::into)).transpose()
+    }
+
+    fn take<D>(&self) -> Result<Option<D>>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        let res = self.get()?;
+        if res.is_some() {
+            // Since this is a reference to an element in an AnnData object,
+            // we should probably clear it from the AnnData object if we want "take" semantics.
+            // However, ArrayElem doesn't have a direct reference back to the container attribute name.
+            // For now, we'll just return the data, which is already owned by the Rust side after get().
+        }
+        Ok(res)
     }
 
     fn slice<D, S>(&self, slice: S) -> Result<Option<D>>

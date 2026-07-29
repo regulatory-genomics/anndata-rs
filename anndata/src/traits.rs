@@ -68,6 +68,15 @@ pub trait AnnDataOp {
     /// Reads the variable annotations.
     fn read_var(&self) -> Result<DataFrame>;
 
+    /// Takes the 'X' element, moving it out of the anndata object.
+    fn take_x<D>(&self) -> Result<Option<D>>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        self.x().take()
+    }
+
     /// Changes the observation annotations.
     fn set_obs(&self, obs: DataFrame) -> Result<()>;
 
@@ -238,7 +247,7 @@ pub trait AnnDataOp {
                         (key, MatrixBuilder::new_dense(&adata.file, "X", t).unwrap())
                     })
                     .collect(),
-                DataType::CsrMatrix(t) => adatas
+                DataType::CsrMatrix(t, _p) => adatas
                     .iter()
                     .map(|(key, (adata, _))| {
                         (key, MatrixBuilder::new_sparse(&adata.file, "X", t).unwrap())
@@ -481,7 +490,8 @@ impl<B: Backend> AnnDataOp for AnnData<B> {
         let mut obs_lock = self.n_obs.lock();
         let mut vars_lock = self.n_vars.lock();
         self.del_x()?;
-        let new_elem = ArrayElem::try_from(ArrayChunk::write_by_chunk(iter, &self.file, "X")?)?;
+        let new_elem =
+            ArrayElem::try_from(ArrayChunk::write_by_chunk(iter, &self.file, "X", None)?)?;
         let shape = new_elem.inner().shape().clone();
 
         match obs_lock.try_set(shape[0]).and(vars_lock.try_set(shape[1])) {
@@ -923,6 +933,18 @@ pub trait ElemCollectionOp {
         })
     }
 
+    fn drain<D>(&self) -> impl Iterator<Item = (String, D)>
+    where
+        D: TryFrom<Data>,
+        <D as TryFrom<Data>>::Error: Into<anyhow::Error>,
+    {
+        self.keys().into_iter().flat_map(|key| {
+            let data = self.get_item::<D>(&key).unwrap()?;
+            self.remove(&key).unwrap();
+            Some((key, data))
+        })
+    }
+
     /// Adds an item to the collection.
     fn add<D: Into<Data>>(&self, key: &str, data: D) -> Result<()>;
 
@@ -970,7 +992,32 @@ pub trait AxisArraysOp {
         <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
     {
         self.keys().into_iter().flat_map(move |key| {
-            let data = self.get_item_slice::<D, _>(&key, &slice).unwrap()?;
+            let data = self.get_item_slice::<D, _>(&key, slice.as_ref()).unwrap()?;
+            Some((key, data))
+        })
+    }
+
+    fn drain<D>(&self) -> impl Iterator<Item = (String, D)>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        self.keys().into_iter().flat_map(|key| {
+            let data = self.get_item::<D>(&key).unwrap()?;
+            self.remove(&key).unwrap();
+            Some((key, data))
+        })
+    }
+
+    fn drain_slice<'a, D, S>(&'a self, slice: S) -> impl Iterator<Item = (String, D)> + 'a
+    where
+        D: TryFrom<ArrayData> + 'a,
+        S: AsRef<[SelectInfoElem]> + 'a,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        self.keys().into_iter().flat_map(move |key| {
+            let data = self.get_item_slice::<D, _>(&key, slice.as_ref()).unwrap()?;
+            self.remove(&key).unwrap();
             Some((key, data))
         })
     }
@@ -1083,19 +1130,34 @@ pub trait ArrayElemOp {
     /// Returns whether the element contains no data.
     fn is_none(&self) -> bool;
 
+    /// Returns whether the data is currently cached in memory.
+    fn is_cached(&self) -> bool;
+
+    /// Enables caching of the array data.
+    fn enable_cache(&self);
+
+    /// Disables caching of the array data.
+    fn disable_cache(&self);
+
     /// Return the data type of the array.
     fn dtype(&self) -> Option<DataType>;
 
     /// Returns the shape of the array.
     fn shape(&self) -> Option<Shape>;
 
-    /// Gets the data.
+    /// Gets the array data.
     fn get<D>(&self) -> Result<Option<D>>
     where
         D: TryFrom<ArrayData>,
         <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>;
 
-    /// Gets a slice of the data.
+    /// Takes the array data, moving it out of the cache if present.
+    fn take<D>(&self) -> Result<Option<D>>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>;
+
+    /// Gets a slice of the array data.
     fn slice<D, S>(&self, slice: S) -> Result<Option<D>>
     where
         D: TryFrom<ArrayData>,
@@ -1141,6 +1203,22 @@ impl<B: Backend> ArrayElemOp for ArrayElem<B> {
         self.lock().is_none()
     }
 
+    fn is_cached(&self) -> bool {
+        self.lock().as_ref().is_some_and(|x| x.is_cached())
+    }
+
+    fn enable_cache(&self) {
+        if let Some(elem) = self.lock().as_mut() {
+            elem.enable_cache();
+        }
+    }
+
+    fn disable_cache(&self) {
+        if let Some(elem) = self.lock().as_mut() {
+            elem.disable_cache();
+        }
+    }
+
     fn dtype(&self) -> Option<DataType> {
         self.lock().as_ref().map(|x| x.dtype())
     }
@@ -1157,6 +1235,19 @@ impl<B: Backend> ArrayElemOp for ArrayElem<B> {
         let mut lock = self.lock();
         if let Some(elem) = lock.as_mut() {
             elem.data()?.try_into().map_err(Into::into).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn take<D>(&self) -> Result<Option<D>>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        let mut lock = self.lock();
+        if let Some(elem) = lock.as_mut() {
+            elem.take()?.try_into().map_err(Into::into).map(Some)
         } else {
             Ok(None)
         }
@@ -1199,6 +1290,13 @@ impl<B: Backend> ArrayElemOp for StackedArrayElem<B> {
         self.0.is_none()
     }
 
+    fn is_cached(&self) -> bool {
+        false
+    }
+
+    fn enable_cache(&self) {}
+    fn disable_cache(&self) {}
+
     fn dtype(&self) -> Option<DataType> {
         if self.is_none() {
             None
@@ -1217,6 +1315,14 @@ impl<B: Backend> ArrayElemOp for StackedArrayElem<B> {
         <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
     {
         self.data()
+    }
+
+    fn take<D>(&self) -> Result<Option<D>>
+    where
+        D: TryFrom<ArrayData>,
+        <D as TryFrom<ArrayData>>::Error: Into<anyhow::Error>,
+    {
+        self.get()
     }
 
     fn slice<D, S>(&self, slice: S) -> Result<Option<D>>

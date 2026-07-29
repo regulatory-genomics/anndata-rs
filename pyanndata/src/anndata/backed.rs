@@ -48,7 +48,7 @@ use super::get_backend;
     filename
         Name of backing file.
     backend
-        The backend to use. "hdf5" or "zarr" are supported.
+        The backend to use. The Python bindings currently support "hdf5".
 
     Note
     ----
@@ -295,6 +295,12 @@ impl AnnData {
     pub fn get_x(&self) -> Option<PyArrayElem> {
         self.0.get_x()
     }
+
+    #[pyo3(text_signature = "($self)")]
+    pub fn take_x(&self) -> Result<Option<PyArrayData>> {
+        self.0.take_x()
+    }
+
     #[setter(X)]
     pub fn set_x(&self, data: Option<PyArrayData>) -> Result<()> {
         self.0.set_x(data)
@@ -402,7 +408,7 @@ impl AnnData {
     /// inplace: bool
     ///     Whether to modify the AnnData object in place or return a new AnnData object.
     /// backend: str | None
-    ///     The backend to use. "hdf5" or "zarr" are supported.
+    ///     The backend to use. The Python bindings currently support "hdf5".
     ///
     /// Returns
     /// -------
@@ -532,8 +538,8 @@ impl AnnData {
     /// ----------
     /// filename: Path
     ///     File name of the output `.h5ad` file.
-    /// backend: Literal['hdf5', 'zarr']
-    ///     The backend to use. "hdf5" or "zarr" are supported.
+    /// backend: Literal['hdf5']
+    ///     The backend to use. The Python bindings currently support "hdf5".
     /// partial : list[str] | None
     ///     A list of fields to copy. If None, copies all fields. Possible fields are:
     ///     "X", "obs", "var", "obsm", "obsp", "varm", "varp", "uns", "layers".
@@ -572,8 +578,8 @@ impl AnnData {
     /// ----------
     /// filename
     ///     File name of the output `.h5ad` file.
-    /// backend: Literal['hdf5', 'zarr']
-    ///     The backend to use. "hdf5" or "zarr" are supported.
+    /// backend: Literal['hdf5']
+    ///     The backend to use. The Python bindings currently support "hdf5".
     /// partial : list[str] | None
     ///     A list of fields to copy. If None, copies all fields. Possible fields are:
     ///     "X", "obs", "var", "obsm", "obsp", "varm", "varp", "uns", "layers".
@@ -664,6 +670,7 @@ trait AnnDataTrait: Send + Sync + Downcast {
     fn var_ix(&self, index: Bound<'_, PyAny>) -> Result<Vec<usize>>;
 
     fn get_x(&self) -> Option<PyArrayElem>;
+    fn take_x(&self) -> Result<Option<PyArrayData>>;
     fn get_obs(&self) -> Option<PyDataFrameElem>;
     fn get_var(&self) -> Option<PyDataFrameElem>;
     fn get_uns(&self) -> Option<PyElemCollection>;
@@ -799,6 +806,13 @@ impl<B: Backend> AnnDataTrait for InnerAnnData<B> {
         } else {
             Some(x.clone().into())
         }
+    }
+
+    fn take_x(&self) -> Result<Option<PyArrayData>> {
+        self.adata
+            .inner()
+            .take_x::<ArrayData>()
+            .map(|x| x.map(Into::into))
     }
     fn get_obs(&self) -> Option<PyDataFrameElem> {
         let inner = self.adata.inner();

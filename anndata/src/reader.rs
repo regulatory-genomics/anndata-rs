@@ -1,10 +1,11 @@
 use crate::data::utils::to_csr_data;
+use crate::data::{DynIndSparseMatrix, DynSparseMatrix};
 use crate::{AnnDataOp, ArrayData, data::array::DataFrameIndex};
 
 use anyhow::Result;
 use flate2::read::MultiGzDecoder;
 use itertools::Itertools;
-use nalgebra_sparse::{coo::CooMatrix, csr::CsrMatrix};
+use sprs::CsMatI;
 use std::path::Path;
 use std::{error::Error, fmt, io};
 use std::{
@@ -60,13 +61,15 @@ impl MMReader {
             output.set_x_from_iter(
                 iter.chunk_by(|x| x.0)
                     .into_iter()
-                    .map(|x| x.1.map(|(_, j, v)| (j, v)).collect::<Vec<_>>())
+                    .map(|x| x.1.map(|(_, j, v)| (j as u64, v)).collect::<Vec<_>>())
                     .chunks(2000)
                     .into_iter()
                     .map(|x| {
                         let (r, c, indptr, indices, data) =
                             to_csr_data(x.into_iter().collect::<Vec<_>>(), cols);
-                        CsrMatrix::try_from_csr_data(r, c, indptr, indices, data).unwrap()
+                        let cs = CsMatI::try_new((r, c), indptr, indices, data).unwrap();
+
+                        DynIndSparseMatrix::from(DynSparseMatrix::from(cs))
                     }),
             )?;
         } else {
@@ -268,18 +271,27 @@ where
     }
     match data_type {
         DataType::Integer => {
-            let coo: CooMatrix<i64> = read_mtx_body(reader, sym_mode)?;
-            Ok(CsrMatrix::from(&coo).into())
+            let (shape, row, col, data) = read_mtx_body::<i64, _>(reader, sym_mode)?;
+            let cs = CsMatI::new(shape, row, col, data);
+            let dynamic = DynIndSparseMatrix::from(DynSparseMatrix::from(cs));
+            Ok(ArrayData::from(dynamic))
         }
         DataType::Real => {
-            let coo: CooMatrix<f64> = read_mtx_body(reader, sym_mode)?;
-            Ok(CsrMatrix::from(&coo).into())
+            let (shape, row, col, data) = read_mtx_body::<f64, _>(reader, sym_mode)?;
+            let cs = CsMatI::new(shape, row, col, data);
+            let dynamic = DynIndSparseMatrix::from(DynSparseMatrix::from(cs));
+            Ok(ArrayData::from(dynamic))
         }
         DataType::Complex => unreachable!(),
     }
 }
 
-fn read_mtx_body<T, R>(reader: &mut R, sym_mode: SymmetryMode) -> Result<CooMatrix<T>, IoError>
+type MatrixMarketData<T> = ((usize, usize), Vec<u64>, Vec<u64>, Vec<T>);
+
+fn read_mtx_body<T, R>(
+    reader: &mut R,
+    sym_mode: SymmetryMode,
+) -> Result<MatrixMarketData<T>, IoError>
 where
     R: io::BufRead,
     T: Copy + std::str::FromStr,
@@ -303,7 +315,7 @@ where
     let (rows, cols, entries) = {
         let mut infos = line
             .split_whitespace()
-            .filter_map(|s| s.parse::<usize>().ok());
+            .filter_map(|s| s.parse::<u64>().ok());
         let rows = infos.next().ok_or(BadMatrixMarketFile)?;
         let cols = infos.next().ok_or(BadMatrixMarketFile)?;
         let entries = infos.next().ok_or(BadMatrixMarketFile)?;
@@ -313,9 +325,9 @@ where
         (rows, cols, entries)
     };
     let nnz_max = if sym_mode == SymmetryMode::General {
-        entries
+        entries as usize
     } else {
-        2 * entries
+        2 * entries as usize
     };
     let mut row_inds = Vec::with_capacity(nnz_max);
     let mut col_inds = Vec::with_capacity(nnz_max);
@@ -342,11 +354,11 @@ where
         let row = entry
             .next()
             .ok_or(BadMatrixMarketFile)
-            .and_then(|s| s.parse::<usize>().or(Err(BadMatrixMarketFile)))?;
+            .and_then(|s| s.parse::<u64>().or(Err(BadMatrixMarketFile)))?;
         let col = entry
             .next()
             .ok_or(BadMatrixMarketFile)
-            .and_then(|s| s.parse::<usize>().or(Err(BadMatrixMarketFile)))?;
+            .and_then(|s| s.parse::<u64>().or(Err(BadMatrixMarketFile)))?;
         // MatrixMarket indices are 1-based
         let row = row.checked_sub(1).ok_or(BadMatrixMarketFile)?;
         let col = col.checked_sub(1).ok_or(BadMatrixMarketFile)?;
@@ -374,8 +386,7 @@ where
         }
     }
 
-    CooMatrix::try_from_triplets(rows, cols, row_inds, col_inds, data)
-        .map_err(|_| BadMatrixMarketFile)
+    Ok(((rows as usize, cols as usize), row_inds, col_inds, data))
 }
 
 fn read_header<R>(reader: &mut R) -> Result<(SymmetryMode, DataType), IoError>

@@ -45,7 +45,7 @@ pub(crate) fn get_backend<P: AsRef<Path>>(filename: P, backend: Option<&str>) ->
 ///     If `'r'`, the file is opened in read-only mode.
 ///     If `'r+'`, the file is opened in read/write mode.
 ///     If `None`, the AnnData object is read into memory.
-/// backend: Literal['hdf5', 'zarr']
+/// backend: Literal['hdf5']
 #[pyfunction]
 #[pyo3(
     signature = (filename, backed="r+", backend=None),
@@ -93,7 +93,7 @@ pub fn read<'py>(
 ///     Names for each object being added. These values are used for column values for label.
 /// file: Path | None
 ///     If provided, the concatenated AnnData will be saved to this file.
-/// backend: Literal['hdf5', 'zarr']
+/// backend: Literal['hdf5']
 ///     Backend to use for writing the output file.
 ///
 /// Returns
@@ -192,7 +192,7 @@ pub fn concat<'py>(
 ///     File that stores the variable names.
 /// file
 ///     File name of the output ".h5ad" file.
-/// backend: Literal['hdf5', 'zarr']
+/// backend: Literal['hdf5']
 ///     Backend to use for writing the output file.
 /// sorted
 ///     If true, the input matrix is assumed to be sorted by rows.
@@ -256,7 +256,7 @@ pub fn read_mtx<'py>(
 ///     or a directory containing component anndata files.
 /// mode: str
 ///     "r": Read-only mode; "r+": can modify annotation file but not component anndata files.
-/// backend: Literal['hdf5', 'zarr']
+/// backend: Literal['hdf5']
 ///     Backend to use for reading the annotation file.
 ///
 /// Returns
