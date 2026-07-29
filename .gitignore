@@ -16,6 +16,7 @@ _autosummary
 
 *.egg-info
 __pycache__
+.venv
 
 tests/data
 data

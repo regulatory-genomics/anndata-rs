@@ -237,3 +237,91 @@ fn test_uns_nesting() {
     utils::test_uns_nesting::<H5>();
     utils::test_uns_nesting::<Zarr>();
 }
+
+/// `set_default_write_config` must reach the sparse write path. It previously
+/// built its own `WriteConfig::default()`, so sparse data was always written
+/// with Zstd no matter what the caller configured.
+#[test]
+fn test_write_config_reaches_sparse_path() {
+    use anndata::backend::{
+        Compression, WriteConfig, get_default_write_config, set_default_write_config,
+    };
+
+    // Highly compressible payload, so the two settings give clearly different
+    // file sizes when the config is actually honoured.
+    let (rows, cols, per_row) = (500usize, 400usize, 40usize);
+    let mut indptr = vec![0u64];
+    let mut indices: Vec<i32> = Vec::new();
+    let mut data: Vec<f64> = Vec::new();
+    for r in 0..rows {
+        let mut row: Vec<i32> = (0..per_row).map(|k| ((k * 7 + r) % cols) as i32).collect();
+        row.sort_unstable();
+        row.dedup();
+        data.extend(row.iter().map(|c| ((r + *c as usize) % 3) as f64));
+        indices.extend(row);
+        indptr.push(indices.len() as u64);
+    }
+    let mtx: CsMatI<f64, i32, u64> = CsMatI::new((rows, cols), indptr, indices, data);
+
+    let file_size = |compression: Option<Compression>| -> u64 {
+        with_tmp_dir(|dir| {
+            let path = dir.join("config.h5");
+            set_default_write_config(WriteConfig {
+                compression,
+                block_size: None,
+            });
+            let adata = AnnData::<H5>::new(&path).unwrap();
+            adata.set_x(&mtx).unwrap();
+            adata.close().unwrap();
+            std::fs::metadata(&path).unwrap().len()
+        })
+    };
+
+    let compressed = file_size(Some(Compression::Zst(5)));
+    let uncompressed = file_size(None);
+
+    // Restore the default for any other test sharing this thread.
+    set_default_write_config(WriteConfig::default());
+    assert_eq!(
+        get_default_write_config().compression,
+        Some(Compression::Zst(5))
+    );
+
+    assert!(
+        compressed < uncompressed,
+        "compression setting was ignored: zstd={compressed} bytes, none={uncompressed} bytes"
+    );
+
+    // File size alone is too weak: it still moves if only some of the three
+    // arrays honour the config. The payload is chosen to compress hard, so an
+    // uncompressed file must be at least as large as the raw arrays. If any of
+    // data/indices/indptr were still forced through Zstd, this would not hold.
+    let nnz = mtx.nnz() as u64;
+    let raw_bytes = nnz * (size_of::<f64>() + size_of::<i32>()) as u64
+        + (rows as u64 + 1) * size_of::<u64>() as u64;
+    assert!(
+        uncompressed >= raw_bytes,
+        "some sparse array is still compressed: file={uncompressed} bytes < raw={raw_bytes} bytes"
+    );
+
+    // The data must survive a round-trip either way.
+    with_tmp_dir(|dir| {
+        let path = dir.join("roundtrip.h5");
+        set_default_write_config(WriteConfig {
+            compression: None,
+            block_size: None,
+        });
+        let adata = AnnData::<H5>::new(&path).unwrap();
+        adata.set_x(&mtx).unwrap();
+        adata.close().unwrap();
+
+        let reopened = AnnData::<H5>::open(H5::open(&path).unwrap()).unwrap();
+        let back = reopened
+            .x()
+            .get::<CsMatI<f64, i32, u64>>()
+            .unwrap()
+            .unwrap();
+        set_default_write_config(WriteConfig::default());
+        assert_eq!(back, mtx);
+    });
+}

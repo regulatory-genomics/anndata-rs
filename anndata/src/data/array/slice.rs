@@ -549,6 +549,16 @@ impl<'a> SelectInfoElemBounds<'a> {
         }
     }
 
+    /// Checks whether the selected indices are strictly increasing.
+    ///
+    /// Callers use this to skip re-sorting output that is already ordered.
+    pub fn is_monotonic(&self) -> bool {
+        match self {
+            Self::Index(idx) => idx.windows(2).all(|w| w[0] < w[1]),
+            Self::Slice(slice) => slice.step > 0,
+        }
+    }
+
     /// Checks if the selection element represents a full slice of the axis.
     pub fn is_full(&self, bound: usize) -> bool {
         match self {

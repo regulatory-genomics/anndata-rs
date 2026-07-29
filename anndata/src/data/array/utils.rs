@@ -1,5 +1,7 @@
 use crate::ArrayData;
-use crate::backend::{Backend, BackendData, DatasetOp, GroupOp, WriteConfig};
+use crate::backend::{
+    Backend, BackendData, DatasetOp, GroupOp, WriteConfig, get_default_write_config,
+};
 use crate::data::{SelectInfoElem, Shape};
 
 use anyhow::{Result, anyhow};
@@ -40,7 +42,7 @@ impl<B: Backend, T: BackendData> ExtendableDataset<B, T> {
             &capacity,
             WriteConfig {
                 block_size: Some(block_size),
-                ..Default::default()
+                ..get_default_write_config()
             },
         )?;
         Ok(Self {

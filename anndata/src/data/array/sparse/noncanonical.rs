@@ -602,12 +602,20 @@ impl<N: BackendData, I: sprs::SpIndex + BackendData> Writable for CsrNonCanonica
     ) -> Result<DataContainer<B>> {
         let mut group = location.new_group(name)?;
         self.metadata().save(&mut group)?;
-        group.new_array_dataset("data", self.values.as_slice().into(), Default::default())?;
-        group.new_array_dataset("indptr", self.offsets.as_slice().into(), Default::default())?;
+        group.new_array_dataset(
+            "data",
+            self.values.as_slice().into(),
+            get_default_write_config(),
+        )?;
+        group.new_array_dataset(
+            "indptr",
+            self.offsets.as_slice().into(),
+            get_default_write_config(),
+        )?;
         group.new_array_dataset(
             "indices",
             self.indices.as_slice().into(),
-            Default::default(),
+            get_default_write_config(),
         )?;
         Ok(DataContainer::Group(group))
     }

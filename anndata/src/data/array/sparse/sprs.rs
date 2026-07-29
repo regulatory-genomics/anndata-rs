@@ -8,7 +8,9 @@ use sprs::{CompressedStorage, CsMatI, SpIndex};
 
 use crate::{
     HasShape, Readable, ReadableArray, Selectable, Writable, WritableArray,
-    backend::{AttributeOp, Backend, BackendData, DataType, DatasetOp, GroupOp},
+    backend::{
+        AttributeOp, Backend, BackendData, DataType, DatasetOp, GroupOp, get_default_write_config,
+    },
     data::{DynArray, Element, MetaData, SelectInfoElem, SelectInfoElemBounds, Shape, Stackable},
 };
 
@@ -158,6 +160,285 @@ impl<N: BackendData, T: BackendData + SpIndex> Element for CsMatI<N, T, u64> {
     }
 }
 
+/// Upper bound on the dense minor-axis lookup table, in entries. Caps the
+/// transient allocation at 16 MiB; wider minor axes fall back to hashing.
+const MAX_DENSE_MINOR_LOOKUP: usize = 1 << 22;
+
+/// Sentinel marking a minor index that is not part of the selection.
+const NOT_SELECTED: u32 = u32::MAX;
+
+/// Maps an original minor-axis index onto its position(s) in the selection.
+enum MinorLookup {
+    /// Dense table indexed directly by the original minor index. Only built for
+    /// duplicate-free selections, so each source index yields at most one
+    /// output position and no inner container is needed.
+    Dense(Vec<u32>),
+    /// Fallback for selections that repeat an index, and for minor axes too
+    /// wide to justify a dense table.
+    Sparse(HashMap<usize, smallvec::SmallVec<[usize; 1]>>),
+}
+
+impl MinorLookup {
+    /// Builds the lookup, preferring the dense table when it is both bounded in
+    /// size and small enough to be amortised over the nonzeros being scanned.
+    fn build(bounds: &SelectInfoElemBounds, minor_dim: usize, nnz_scanned: usize) -> Self {
+        let sel_len = bounds.len();
+        let dense_is_worthwhile = minor_dim <= MAX_DENSE_MINOR_LOOKUP
+            && sel_len < NOT_SELECTED as usize
+            && minor_dim <= 4 * nnz_scanned.max(sel_len).max(1024);
+
+        if dense_is_worthwhile {
+            let mut table = vec![NOT_SELECTED; minor_dim];
+            let mut duplicated = false;
+            for (pos, idx) in bounds.iter().enumerate() {
+                if table[idx] != NOT_SELECTED {
+                    duplicated = true;
+                    break;
+                }
+                table[idx] = pos as u32;
+            }
+            if !duplicated {
+                return Self::Dense(table);
+            }
+        }
+
+        let mut map: HashMap<usize, smallvec::SmallVec<[usize; 1]>> = HashMap::new();
+        for (pos, idx) in bounds.iter().enumerate() {
+            map.entry(idx).or_default().push(pos);
+        }
+        Self::Sparse(map)
+    }
+}
+
+/// Estimates how many nonzeros a minor-axis selection will keep, assuming they
+/// are spread evenly across the axis.
+///
+/// Used only to size the output buffers: without it they grow from empty and
+/// pay a reallocation and copy at every doubling. The estimate is deliberately
+/// capped at `nnz_scanned` — the true upper bound for a duplicate-free
+/// selection — so a skewed matrix cannot inflate the allocation.
+fn estimate_output_nnz(nnz_scanned: usize, sel_len: usize, minor_dim: usize) -> usize {
+    if minor_dim == 0 || sel_len == 0 {
+        return 0;
+    }
+    let expected = (nnz_scanned as u128 * sel_len as u128 / minor_dim as u128) as usize;
+    // An eighth of headroom absorbs mild non-uniformity without a second grow.
+    expected
+        .saturating_add(expected / 8)
+        .saturating_add(64)
+        .min(nnz_scanned)
+}
+
+/// Releases estimate-driven over-allocation once the true size is known.
+///
+/// [`estimate_output_nnz`] assumes an even spread; a skewed matrix can leave a
+/// selection result holding materially more memory than it uses, and these
+/// buffers are handed straight to the caller. Only shrinks when the slack is
+/// both proportionally and absolutely large, so the common well-estimated case
+/// does not pay for a reallocation.
+fn shrink_if_slack<T>(vec: &mut Vec<T>) {
+    const MIN_SLACK_BYTES: usize = 1 << 20;
+    let slack = vec.capacity() - vec.len();
+    if slack > vec.len() / 4 && slack * size_of::<T>() > MIN_SLACK_BYTES {
+        vec.shrink_to_fit();
+    }
+}
+
+/// Debug-only structural check on the arrays produced by [`select_compressed`].
+///
+/// The release path constructs the matrix without validation because selection
+/// preserves the invariants of a well-formed input; this keeps the test suite
+/// honest about that claim without paying for it in release builds.
+#[cfg(debug_assertions)]
+fn assert_valid_compressed<T: SpIndex + ToPrimitive>(
+    indptr: &[u64],
+    indices: &[T],
+    n_major: usize,
+    minor_dim: usize,
+) {
+    assert_eq!(
+        indptr.len(),
+        n_major + 1,
+        "indptr length must be n_major + 1"
+    );
+    assert_eq!(indptr[0], 0, "indptr must start at 0");
+    assert_eq!(
+        *indptr.last().unwrap() as usize,
+        indices.len(),
+        "indptr must end at nnz"
+    );
+    for slot in 0..n_major {
+        let (start, end) = (indptr[slot] as usize, indptr[slot + 1] as usize);
+        assert!(start <= end, "indptr must be non-decreasing");
+        let mut prev: Option<usize> = None;
+        for idx in &indices[start..end] {
+            let idx = idx.to_usize().unwrap();
+            assert!(idx < minor_dim, "minor index out of bounds");
+            if let Some(p) = prev {
+                assert!(p < idx, "minor indices must be strictly increasing");
+            }
+            prev = Some(idx);
+        }
+    }
+}
+
+/// Selects along the major (outer) and minor (inner) axes of a compressed
+/// matrix, returning the raw arrays for the result.
+///
+/// Shared by the CSR and CSC branches of [`Selectable`]: the two differ only in
+/// which of rows/columns plays the major role. Output slots keep their source
+/// ordering, so a structurally valid input yields a structurally valid result.
+fn select_compressed<N, T>(
+    indptr: &[u64],
+    indices: &[T],
+    data: &[N],
+    minor_dim: usize,
+    major_bounds: &SelectInfoElemBounds,
+    minor_bounds: &SelectInfoElemBounds,
+) -> (Vec<u64>, Vec<T>, Vec<N>)
+where
+    N: BackendData,
+    T: BackendData + SpIndex + ToPrimitive,
+{
+    let n_major = major_bounds.len();
+    let mut new_indptr = Vec::with_capacity(n_major + 1);
+    new_indptr.push(0u64);
+
+    // Exact nonzero count across the selected slots. Doubles as the allocation
+    // size for whole-slot selections and as the amortisation budget for the
+    // dense lookup table.
+    let nnz_scanned: usize = (0..n_major)
+        .map(|i| {
+            let slot = major_bounds.index(i);
+            (indptr[slot + 1] - indptr[slot]) as usize
+        })
+        .sum();
+
+    // Whole slots: copy each selected run verbatim.
+    if minor_bounds.is_full(minor_dim) {
+        let mut new_indices = Vec::with_capacity(nnz_scanned);
+        let mut new_data = Vec::with_capacity(nnz_scanned);
+        for i in 0..n_major {
+            let slot = major_bounds.index(i);
+            let (start, end) = (indptr[slot] as usize, indptr[slot + 1] as usize);
+            new_indices.extend_from_slice(&indices[start..end]);
+            new_data.extend_from_slice(&data[start..end]);
+            new_indptr.push(new_indices.len() as u64);
+        }
+        return (new_indptr, new_indices, new_data);
+    }
+
+    // Contiguous ascending range: the minor indices within a slot are sorted, so
+    // binary search bounds the run instead of testing every nonzero.
+    if let SelectInfoElemBounds::Slice(range) = minor_bounds
+        && range.step == 1
+    {
+        let (lo, hi) = (range.start, range.end);
+        let estimate = estimate_output_nnz(nnz_scanned, hi.saturating_sub(lo), minor_dim);
+        let mut new_indices = Vec::with_capacity(estimate);
+        let mut new_data = Vec::with_capacity(estimate);
+        for i in 0..n_major {
+            let slot = major_bounds.index(i);
+            let (start, end) = (indptr[slot] as usize, indptr[slot + 1] as usize);
+            let run = &indices[start..end];
+            let from = start + run.partition_point(|x| x.to_usize().unwrap() < lo);
+            let to = start + run.partition_point(|x| x.to_usize().unwrap() < hi);
+            new_indices.extend(
+                indices[from..to]
+                    .iter()
+                    .map(|x| -> T { SpIndex::from_usize(x.to_usize().unwrap() - lo) }),
+            );
+            new_data.extend_from_slice(&data[from..to]);
+            new_indptr.push(new_indices.len() as u64);
+        }
+        shrink_if_slack(&mut new_indices);
+        shrink_if_slack(&mut new_data);
+        return (new_indptr, new_indices, new_data);
+    }
+
+    let lookup = MinorLookup::build(minor_bounds, minor_dim, nnz_scanned);
+    let is_monotonic = minor_bounds.is_monotonic();
+    let estimate = estimate_output_nnz(nnz_scanned, minor_bounds.len(), minor_dim);
+    let mut new_indices = Vec::with_capacity(estimate);
+    let mut new_data = Vec::with_capacity(estimate);
+
+    match &lookup {
+        MinorLookup::Dense(table) => {
+            // At most one output per source nonzero, so a monotonic selection
+            // emits already-sorted runs and needs no workspace at all.
+            if is_monotonic {
+                for i in 0..n_major {
+                    let slot = major_bounds.index(i);
+                    let (start, end) = (indptr[slot] as usize, indptr[slot + 1] as usize);
+                    for j in start..end {
+                        let pos = table[indices[j].to_usize().unwrap()];
+                        if pos != NOT_SELECTED {
+                            new_indices.push(SpIndex::from_usize(pos as usize));
+                            new_data.push(data[j].clone());
+                        }
+                    }
+                    new_indptr.push(new_indices.len() as u64);
+                }
+            } else {
+                let mut workspace: Vec<(u32, N)> = Vec::new();
+                for i in 0..n_major {
+                    let slot = major_bounds.index(i);
+                    let (start, end) = (indptr[slot] as usize, indptr[slot + 1] as usize);
+                    workspace.clear();
+                    for j in start..end {
+                        let pos = table[indices[j].to_usize().unwrap()];
+                        if pos != NOT_SELECTED {
+                            workspace.push((pos, data[j].clone()));
+                        }
+                    }
+                    workspace.sort_unstable_by_key(|x| x.0);
+                    for (pos, val) in &workspace {
+                        new_indices.push(SpIndex::from_usize(*pos as usize));
+                        new_data.push(val.clone());
+                    }
+                    new_indptr.push(new_indices.len() as u64);
+                }
+            }
+        }
+        MinorLookup::Sparse(map) => {
+            let mut workspace: Vec<(usize, N)> = Vec::new();
+            for i in 0..n_major {
+                let slot = major_bounds.index(i);
+                let (start, end) = (indptr[slot] as usize, indptr[slot + 1] as usize);
+                if is_monotonic {
+                    for j in start..end {
+                        if let Some(positions) = map.get(&indices[j].to_usize().unwrap()) {
+                            for &pos in positions {
+                                new_indices.push(SpIndex::from_usize(pos));
+                                new_data.push(data[j].clone());
+                            }
+                        }
+                    }
+                } else {
+                    workspace.clear();
+                    for j in start..end {
+                        if let Some(positions) = map.get(&indices[j].to_usize().unwrap()) {
+                            for &pos in positions {
+                                workspace.push((pos, data[j].clone()));
+                            }
+                        }
+                    }
+                    workspace.sort_unstable_by_key(|x| x.0);
+                    for (pos, val) in &workspace {
+                        new_indices.push(SpIndex::from_usize(*pos));
+                        new_data.push(val.clone());
+                    }
+                }
+                new_indptr.push(new_indices.len() as u64);
+            }
+        }
+    }
+
+    shrink_if_slack(&mut new_indices);
+    shrink_if_slack(&mut new_data);
+    (new_indptr, new_indices, new_data)
+}
+
 impl<N: BackendData, T: BackendData + SpIndex + ToPrimitive + num::Integer + num::FromPrimitive>
     Selectable for CsMatI<N, T, u64>
 {
@@ -165,7 +446,6 @@ impl<N: BackendData, T: BackendData + SpIndex + ToPrimitive + num::Integer + num
     where
         S: AsRef<crate::data::SelectInfoElem>,
     {
-        let is_csr = self.is_csr();
         let rows = self.rows();
         let cols = self.cols();
 
@@ -177,173 +457,42 @@ impl<N: BackendData, T: BackendData + SpIndex + ToPrimitive + num::Integer + num
             SelectInfoElemBounds::new(&full, cols)
         };
 
-        if is_csr {
-            // CSR Selection
-            let indptr_obj = self.indptr();
-            let indptr_slice = indptr_obj.as_slice().unwrap();
-            let mut new_indptr = Vec::with_capacity(row_bounds.len() + 1);
-            let mut temp_indices = Vec::new();
-            let mut temp_data = Vec::new();
-            new_indptr.push(0);
+        let indptr_obj = self.indptr();
+        let indptr_slice = indptr_obj.as_slice().unwrap();
+        let shape = (row_bounds.len(), col_bounds.len());
 
-            if col_bounds.is_full(cols) {
-                for i in 0..row_bounds.len() {
-                    let row_idx = row_bounds.index(i);
-                    let start = indptr_slice[row_idx] as usize;
-                    let end = indptr_slice[row_idx + 1] as usize;
-                    temp_indices.extend_from_slice(&self.indices()[start..end]);
-                    temp_data.extend_from_slice(&self.data()[start..end]);
-                    new_indptr.push(temp_indices.len() as u64);
-                }
-                return CsMatI::try_new(
-                    (row_bounds.len(), cols),
-                    new_indptr,
-                    temp_indices,
-                    temp_data,
-                )
-                .unwrap();
-            }
-
-            // Check if minor axis selection is monotonically increasing
-            let is_monotonic = col_bounds
-                .iter()
-                .zip(col_bounds.iter().skip(1))
-                .all(|(a, b)| a < b);
-
-            // Use SmallVec to avoid heap allocations for unique indices
-            let mut col_lookup: HashMap<usize, smallvec::SmallVec<[usize; 1]>> = HashMap::new();
-            for (i, x) in col_bounds.iter().enumerate() {
-                col_lookup.entry(x).or_default().push(i);
-            }
-
-            let mut row_workspace: Vec<(usize, N)> = Vec::new();
-
-            for i in 0..row_bounds.len() {
-                let row_idx = row_bounds.index(i);
-                let start = indptr_slice[row_idx] as usize;
-                let end = indptr_slice[row_idx + 1] as usize;
-
-                if is_monotonic {
-                    // Fast path: skip sorting
-                    for j in start..end {
-                        let col_idx = self.indices()[j].to_usize().unwrap();
-                        if let Some(new_col_indices) = col_lookup.get(&col_idx) {
-                            for &new_col_idx in new_col_indices {
-                                temp_indices.push(SpIndex::from_usize(new_col_idx));
-                                temp_data.push(self.data()[j].clone());
-                            }
-                        }
-                    }
-                } else {
-                    // Slow path: out-of-order or duplicate selection requires sorting
-                    row_workspace.clear();
-                    for j in start..end {
-                        let col_idx = self.indices()[j].to_usize().unwrap();
-                        if let Some(new_col_indices) = col_lookup.get(&col_idx) {
-                            for &new_col_idx in new_col_indices {
-                                row_workspace.push((new_col_idx, self.data()[j].clone()));
-                            }
-                        }
-                    }
-                    row_workspace.sort_by_key(|x| x.0);
-                    for (new_col_idx, val) in &row_workspace {
-                        temp_indices.push(SpIndex::from_usize(*new_col_idx));
-                        temp_data.push(val.clone());
-                    }
-                }
-                new_indptr.push(temp_indices.len() as u64);
-            }
-            CsMatI::try_new(
-                (row_bounds.len(), col_bounds.len()),
-                new_indptr,
-                temp_indices,
-                temp_data,
-            )
-            .unwrap()
+        // The major axis is rows for CSR and columns for CSC; the selection
+        // logic is otherwise identical.
+        let (storage, minor_dim, major_bounds, minor_bounds) = if self.is_csr() {
+            (CompressedStorage::CSR, cols, &row_bounds, &col_bounds)
         } else {
-            // CSC Selection
-            let indptr_obj = self.indptr();
-            let indptr_slice = indptr_obj.as_slice().unwrap();
-            let mut new_indptr = Vec::with_capacity(col_bounds.len() + 1);
-            let mut temp_indices = Vec::new();
-            let mut temp_data = Vec::new();
-            new_indptr.push(0);
+            (CompressedStorage::CSC, rows, &col_bounds, &row_bounds)
+        };
 
-            if row_bounds.is_full(rows) {
-                for i in 0..col_bounds.len() {
-                    let col_idx = col_bounds.index(i);
-                    let start = indptr_slice[col_idx] as usize;
-                    let end = indptr_slice[col_idx + 1] as usize;
-                    temp_indices.extend_from_slice(&self.indices()[start..end]);
-                    temp_data.extend_from_slice(&self.data()[start..end]);
-                    new_indptr.push(temp_indices.len() as u64);
-                }
-                return CsMatI::try_new_csc(
-                    (rows, col_bounds.len()),
-                    new_indptr,
-                    temp_indices,
-                    temp_data,
-                )
-                .unwrap();
-            }
+        let (new_indptr, new_indices, new_data) = select_compressed(
+            indptr_slice,
+            self.indices(),
+            self.data(),
+            minor_dim,
+            major_bounds,
+            minor_bounds,
+        );
 
-            // Check if minor axis selection is monotonically increasing
-            let is_monotonic = row_bounds
-                .iter()
-                .zip(row_bounds.iter().skip(1))
-                .all(|(a, b)| a < b);
+        #[cfg(debug_assertions)]
+        assert_valid_compressed(
+            &new_indptr,
+            &new_indices,
+            major_bounds.len(),
+            minor_bounds.len(),
+        );
 
-            // Use SmallVec to avoid heap allocations for unique indices
-            let mut row_lookup: HashMap<usize, smallvec::SmallVec<[usize; 1]>> = HashMap::new();
-            for (i, x) in row_bounds.iter().enumerate() {
-                row_lookup.entry(x).or_default().push(i);
-            }
-
-            let mut col_workspace: Vec<(usize, N)> = Vec::new();
-
-            for i in 0..col_bounds.len() {
-                let col_idx = col_bounds.index(i);
-                let start = indptr_slice[col_idx] as usize;
-                let end = indptr_slice[col_idx + 1] as usize;
-
-                if is_monotonic {
-                    // Fast path: skip sorting
-                    for j in start..end {
-                        let row_idx = self.indices()[j].to_usize().unwrap();
-                        if let Some(new_row_indices) = row_lookup.get(&row_idx) {
-                            for &new_row_idx in new_row_indices {
-                                temp_indices.push(SpIndex::from_usize(new_row_idx));
-                                temp_data.push(self.data()[j].clone());
-                            }
-                        }
-                    }
-                } else {
-                    // Slow path: out-of-order or duplicate selection requires sorting
-                    col_workspace.clear();
-                    for j in start..end {
-                        let row_idx = self.indices()[j].to_usize().unwrap();
-                        if let Some(new_row_indices) = row_lookup.get(&row_idx) {
-                            for &new_row_idx in new_row_indices {
-                                col_workspace.push((new_row_idx, self.data()[j].clone()));
-                            }
-                        }
-                    }
-                    col_workspace.sort_by_key(|x| x.0);
-                    for (new_row_idx, val) in &col_workspace {
-                        temp_indices.push(SpIndex::from_usize(*new_row_idx));
-                        temp_data.push(val.clone());
-                    }
-                }
-                new_indptr.push(temp_indices.len() as u64);
-            }
-            CsMatI::try_new_csc(
-                (row_bounds.len(), col_bounds.len()),
-                new_indptr,
-                temp_indices,
-                temp_data,
-            )
-            .unwrap()
-        }
+        // SAFETY: `self` is a well-formed compressed matrix, and selection
+        // preserves that: slots keep their ascending minor order (restored by
+        // sorting when the selection is not monotonic), distinct selection
+        // positions map to distinct output indices, and every emitted index is
+        // a selection position and so below `minor_bounds.len()`. Checked in
+        // debug builds by `assert_valid_compressed` above.
+        unsafe { CsMatI::new_unchecked(storage, shape, new_indptr, new_indices, new_data) }
     }
 }
 
@@ -407,16 +556,16 @@ impl<N: BackendData, T: BackendData + SpIndex> Writable for CsMatI<N, T, u64> {
         let mut group = location.new_group(name)?;
 
         self.metadata().save(&mut group)?;
-        group.new_array_dataset("data", self.data().into(), Default::default())?;
+        group.new_array_dataset("data", self.data().into(), get_default_write_config())?;
 
         let indptr = self.indptr();
         group.new_array_dataset(
             "indptr",
             indptr.as_slice().unwrap().into(),
-            Default::default(),
+            get_default_write_config(),
         )?;
         let min_idx = self.indices();
-        group.new_array_dataset("indices", min_idx.into(), Default::default())?;
+        group.new_array_dataset("indices", min_idx.into(), get_default_write_config())?;
         Ok(crate::backend::DataContainer::Group(group))
     }
 }
@@ -784,5 +933,150 @@ mod sparse_tests {
         for j in 0..3 {
             assert_eq!(stacked.get(2, j), m2.get(0, j));
         }
+    }
+
+    /// Deterministic test matrix with a mix of dense and empty rows.
+    fn sample_csr(rows: usize, cols: usize) -> CsMatI<f64, i32, u64> {
+        let mut indptr = vec![0u64];
+        let mut indices = Vec::new();
+        let mut data = Vec::new();
+        for r in 0..rows {
+            // Row 3 is deliberately empty; the rest use a shifting stride.
+            if r % 4 != 3 {
+                let mut row: Vec<usize> = (0..cols).filter(|c| (c + r) % 3 == 0).collect();
+                row.sort_unstable();
+                for c in row {
+                    indices.push(c as i32);
+                    data.push((r * cols + c) as f64 + 0.5);
+                }
+            }
+            indptr.push(indices.len() as u64);
+        }
+        CsMatI::new((rows, cols), indptr, indices, data)
+    }
+
+    /// Reference selection via a dense materialisation of the matrix.
+    fn dense_select(m: &CsMatI<f64, i32, u64>, rows: &[usize], cols: &[usize]) -> Vec<Vec<f64>> {
+        rows.iter()
+            .map(|&r| {
+                cols.iter()
+                    .map(|&c| m.get(r, c).copied().unwrap_or(0.0))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn assert_matches_dense(
+        selected: &CsMatI<f64, i32, u64>,
+        expected: &[Vec<f64>],
+        n_cols: usize,
+    ) {
+        assert_eq!(selected.rows(), expected.len());
+        assert_eq!(selected.cols(), n_cols);
+        for (r, row) in expected.iter().enumerate() {
+            for (c, &want) in row.iter().enumerate() {
+                let got = selected.get(r, c).copied().unwrap_or(0.0);
+                assert_eq!(got, want, "mismatch at ({r}, {c})");
+            }
+        }
+    }
+
+    /// Exercises every branch of `select_compressed` against a dense reference:
+    /// full minor axis, contiguous range, monotonic gather, reversed
+    /// (non-monotonic) gather, and a selection repeating an index.
+    #[test]
+    fn test_select_matches_dense_reference() {
+        let m = sample_csr(12, 9);
+        let all_cols: Vec<usize> = (0..9).collect();
+        let rows: Vec<usize> = vec![0, 1, 3, 5, 8, 11];
+
+        let cases: Vec<(&str, Vec<usize>)> = vec![
+            ("full minor axis", all_cols.clone()),
+            ("contiguous range", (2..7).collect()),
+            ("monotonic gather", vec![0, 2, 5, 8]),
+            ("reversed", vec![8, 5, 2, 0]),
+            ("duplicated", vec![1, 1, 4, 4, 4]),
+            ("single column", vec![6]),
+            ("empty", vec![]),
+        ];
+
+        for (label, cols) in cases {
+            let selected = m.select(&[
+                SelectInfoElem::Index(rows.clone()),
+                SelectInfoElem::Index(cols.clone()),
+            ]);
+            let expected = dense_select(&m, &rows, &cols);
+            assert_eq!(selected.cols(), cols.len(), "{label}: column count");
+            assert_matches_dense(&selected, &expected, cols.len());
+        }
+    }
+
+    /// A contiguous minor-axis slice takes the binary-search path; confirm it
+    /// agrees with the equivalent explicit index list.
+    #[test]
+    fn test_select_contiguous_slice_matches_index_list() {
+        let m = sample_csr(10, 12);
+        let rows: Vec<usize> = vec![0, 2, 4, 6];
+        let by_slice = m.select(&[
+            SelectInfoElem::Index(rows.clone()),
+            SelectInfoElem::from(3..9),
+        ]);
+        let by_index = m.select(&[
+            SelectInfoElem::Index(rows),
+            SelectInfoElem::Index((3..9).collect()),
+        ]);
+        assert_eq!(by_slice.indptr().as_slice(), by_index.indptr().as_slice());
+        assert_eq!(by_slice.indices(), by_index.indices());
+        assert_eq!(by_slice.data(), by_index.data());
+    }
+
+    /// CSC selection goes through the same routine with the axes swapped.
+    #[test]
+    fn test_select_csc_matches_csr() {
+        let csr = sample_csr(10, 8);
+        let csc = csr.to_other_storage();
+        assert!(csc.is_csc());
+
+        let rows: Vec<usize> = vec![1, 2, 6, 9];
+        let cols: Vec<usize> = vec![5, 1, 7];
+        let info = [
+            SelectInfoElem::Index(rows.clone()),
+            SelectInfoElem::Index(cols.clone()),
+        ];
+
+        let from_csr = csr.select(&info);
+        let from_csc = csc.select(&info);
+        assert!(from_csc.is_csc());
+        assert_eq!(from_csc.shape(), from_csr.shape());
+
+        let expected = dense_select(&csr, &rows, &cols);
+        assert_matches_dense(&from_csr, &expected, cols.len());
+        for (r, row) in expected.iter().enumerate() {
+            for (c, &want) in row.iter().enumerate() {
+                assert_eq!(from_csc.get(r, c).copied().unwrap_or(0.0), want);
+            }
+        }
+    }
+
+    /// The dense lookup is skipped when the minor axis dwarfs the work; the
+    /// hashing fallback must produce identical output.
+    #[test]
+    fn test_select_wide_minor_axis_uses_fallback() {
+        // 2 rows, a very wide minor axis, and only a handful of nonzeros, so
+        // `MinorLookup::build` rejects the dense table.
+        let cols = 50_000_000usize;
+        let indptr = vec![0u64, 2, 3];
+        let indices: Vec<i64> = vec![10, 40_000_000, 25_000_000];
+        let data = vec![1.0f64, 2.0, 3.0];
+        let m: CsMatI<f64, i64, u64> = CsMatI::new((2, cols), indptr, indices, data);
+
+        let selected = m.select(&[
+            SelectInfoElem::full(),
+            SelectInfoElem::Index(vec![25_000_000, 10, 40_000_000]),
+        ]);
+        assert_eq!(selected.shape(), (2, 3));
+        assert_eq!(selected.get(0, 1).copied().unwrap_or(0.0), 1.0);
+        assert_eq!(selected.get(0, 2).copied().unwrap_or(0.0), 2.0);
+        assert_eq!(selected.get(1, 0).copied().unwrap_or(0.0), 3.0);
     }
 }
