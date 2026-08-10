@@ -737,12 +737,7 @@ where
 }
 
 fn del_attr(loc: &Location, name: &str) {
-    unsafe {
-        let c_name = std::ffi::CString::new(name).unwrap().into_raw();
-        if hdf5_sys::h5a::H5Aexists(loc.id(), c_name) != 0 {
-            hdf5_sys::h5a::H5Adelete(loc.id(), c_name);
-        }
-    }
+    let _e = loc.delete_attr(name);
 }
 
 fn json_to_ndarray<F, T>(json: &Value, f: F) -> Result<Option<ArrayD<T>>>
