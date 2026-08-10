@@ -364,27 +364,27 @@ fn write_column<B: Backend, G: GroupOp<B>>(
     name: &str,
 ) -> Result<DataContainer<B>> {
     match series.dtype() {
-        DataType::UInt8 => write_series_helper(series.u8()?, location, name),
-        DataType::UInt16 => write_series_helper(series.u16()?, location, name),
-        DataType::UInt32 => write_series_helper(series.u32()?, location, name),
-        DataType::UInt64 => write_series_helper(series.u64()?, location, name),
-        DataType::Int8 => write_series_helper(series.i8()?, location, name),
-        DataType::Int16 => write_series_helper(series.i16()?, location, name),
-        DataType::Int32 => write_series_helper(series.i32()?, location, name),
-        DataType::Int64 => write_series_helper(series.i64()?, location, name),
+        DataType::UInt8 => write_series_helper(series.u8()?.iter(), location, name),
+        DataType::UInt16 => write_series_helper(series.u16()?.iter(), location, name),
+        DataType::UInt32 => write_series_helper(series.u32()?.iter(), location, name),
+        DataType::UInt64 => write_series_helper(series.u64()?.iter(), location, name),
+        DataType::Int8 => write_series_helper(series.i8()?.iter(), location, name),
+        DataType::Int16 => write_series_helper(series.i16()?.iter(), location, name),
+        DataType::Int32 => write_series_helper(series.i32()?.iter(), location, name),
+        DataType::Int64 => write_series_helper(series.i64()?.iter(), location, name),
         DataType::Float32 => series
             .f32()?
-            .into_iter()
+            .iter()
             .map(|x| x.unwrap_or(f32::NAN))
             .collect::<Array1<f32>>()
             .write(location, name),
         DataType::Float64 => series
             .f64()?
-            .into_iter()
+            .iter()
             .map(|x| x.unwrap_or(f64::NAN))
             .collect::<Array1<f64>>()
             .write(location, name),
-        DataType::Boolean => write_series_helper(series.bool()?, location, name),
+        DataType::Boolean => write_series_helper(series.bool()?.iter(), location, name),
         DataType::String => {
             let series = series.str()?;
             if let Some(str_vec) = series
@@ -395,7 +395,7 @@ fn write_column<B: Backend, G: GroupOp<B>>(
                 Array1::from(str_vec).write(location, name)
             } else {
                 series
-                    .into_iter()
+                    .iter()
                     .collect::<CategoricalArray>()
                     .write(location, name)
             }
