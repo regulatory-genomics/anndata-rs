@@ -1111,7 +1111,7 @@ impl<B: Backend> AnnDataTrait for InnerAnnData<B> {
             let obs = inner.read_obs()?;
             obs.column(&key)?
                 .str()?
-                .into_iter()
+                .iter()
                 .map(|x| x.map(|s| s.to_string()))
                 .collect()
         } else {
