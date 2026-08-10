@@ -17,6 +17,11 @@ itertools = "0.14"
 hdf5 = { package = "hdf5-metno", version = "0.12.3", features = ["blosc", "blosc-zstd"] }
 blosc-src = { version = "0.3.0", features = ["zstd"] }
 hdf5-sys = { package = "hdf5-metno-sys", version = "0.11", features = ["static", "zlib", "threadsafe"] }
+# hdf5-metno-src 0.10.3 vendors HDF5 2.2.0, whose version string hdf5-metno-sys
+# 0.11.x rejects outright (`Invalid H5_VERSION: "2.2.0"`). Because `-src` is only
+# a `^0.10` dependency of `-sys`, a fresh resolution picks it up and this crate
+# stops building. Pin until the `-sys` requirement can move to ^0.12.
+hdf5-src = { package = "hdf5-metno-src", version = "=0.10.2" }
 libz-sys = { version = "1", features = ["libc"], default-features = false }
 ndarray = "0.17"
 
