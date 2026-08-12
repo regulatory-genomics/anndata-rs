@@ -14,7 +14,7 @@ homepage = "https://github.com/kaizhang/anndata-rs"
 anndata = { version = "0.7.0", path = "../anndata" }
 anyhow = "1.0"
 itertools = "0.14"
-hdf5 = { package = "hdf5-metno", version = "0.12.3", features = ["blosc", "blosc-zstd", "static", "zlib"] }
+hdf5 = { package = "hdf5-metno", version = "0.14.1", features = ["blosc", "blosc-zstd", "static", "zlib"] }
 blosc-src = { version = "0.3.0", features = ["zstd"] }
 libz-sys = { version = "1", features = ["libc"], default-features = false }
 ndarray = "0.17"
