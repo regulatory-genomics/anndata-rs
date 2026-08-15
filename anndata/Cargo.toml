@@ -19,7 +19,20 @@ itertools = "0.14"
 ndarray = "0.17"
 nalgebra-sparse = "0.11"
 num = "0.4"
-polars = { version = "0.53", features = ["lazy", "ndarray", "dtype-full"] }
+# AnnData tables use CSV I/O, lazy concatenation, ndarray conversion, and the
+# scalar dtypes listed below. Avoid Polars's defaults and `dtype-full`: those
+# also enable formatting, temporal/decimal/array types, and other code that the
+# core Rust API never constructs.
+polars = { version = "0.53", default-features = false, features = [
+  "csv",
+  "dtype-categorical",
+  "dtype-i8",
+  "dtype-i16",
+  "dtype-u8",
+  "dtype-u16",
+  "lazy",
+  "ndarray",
+] }
 paste = "1.0"
 parking_lot = "0.12"
 smallvec = "1.15"
