@@ -1,6 +1,6 @@
 use crate::{
     ElemCollectionOp,
-    backend::{AttributeOp, Backend, GroupOp, iter_containers},
+    backend::{AttributeOp, Backend, DataContainer, GroupOp, iter_containers},
     container::base::*,
     data::*,
 };
@@ -253,6 +253,7 @@ pub struct InnerAxisArrays<B: Backend> {
     container: B::Group,
     dim1: Option<Dim>, // If dim1 is None, mutating AxisArrays is not allowed.
     dim2: Option<Dim>, // If dim2 is None, mutating RowColumn AxisArrays is not allowed.
+    names: Option<&'static str>, // Root dataframe ("obs"/"var") holding the names of the first axis.
     data: HashMap<String, ArrayElem<B>>,
 }
 
@@ -313,10 +314,34 @@ impl<B: Backend> InnerAxisArrays<B> {
         self.dim2.as_ref().expect("Dim2 is not set!")
     }
 
+    /// Names along the first axis, i.e. the index dataframes stored here must have.
+    fn axis_names(&self) -> Result<Option<DataFrameIndex>> {
+        let Some(names) = self.names else {
+            return Ok(None);
+        };
+        let store = self.container.store()?;
+        if !store.exists(names)? {
+            return Ok(None);
+        }
+        let index = DataFrameIndex::read(&DataContainer::<B>::open(&store, names)?)?;
+        Ok((!index.is_empty()).then_some(index))
+    }
+
+    /// Re-index the dataframes stored here with the current axis names.
+    pub(crate) fn update_index(&mut self) -> Result<()> {
+        if let Some(index) = self.axis_names()? {
+            self.data
+                .values()
+                .try_for_each(|x| x.inner().set_index(&index))?;
+        }
+        Ok(())
+    }
+
     pub fn add_data<D: Into<ArrayData>>(&mut self, key: &str, data: D) -> Result<()> {
         // Check if the data is compatible with the current size
         let data = data.into();
         let shape = data.shape();
+        let is_df = matches!(data, ArrayData::DataFrame(_));
         match self.axis {
             Axis::Row => {
                 self.dim1().try_set(shape[0])?;
@@ -341,6 +366,12 @@ impl<B: Backend> InnerAxisArrays<B> {
                 self.insert(key.to_string(), elem);
             }
             Some(elem) => elem.inner().save(data)?,
+        }
+
+        // A polars dataframe carries no index, so stamp the axis names onto the
+        // one that was just written.
+        if is_df && let Some(index) = self.axis_names()? {
+            self.data[key].inner().set_index(&index)?;
         }
         Ok(())
     }
@@ -444,7 +475,7 @@ impl<B: Backend> InnerAxisArrays<B> {
                 }
             }
         }
-        Ok(())
+        self.update_index()
     }
 }
 
@@ -491,6 +522,7 @@ impl<B: Backend> AxisArrays<B> {
         axis: Axis,
         dim1: Option<&Dim>,
         dim2: Option<&Dim>,
+        names: Option<&'static str>,
     ) -> Result<Self> {
         let data: HashMap<_, _> = iter_containers::<B>(&group)
             .map(|(k, v)| (k, ArrayElem::try_from(v).unwrap()))
@@ -535,6 +567,7 @@ impl<B: Backend> AxisArrays<B> {
             container: group,
             dim1: dim1.cloned(),
             dim2: dim2.cloned(),
+            names,
             axis,
             data,
         };

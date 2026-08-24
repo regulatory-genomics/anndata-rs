@@ -1,11 +1,14 @@
 mod common;
 pub use common::*;
 
+use anndata::backend::{DataContainer, GroupOp};
 use anndata::concat::{JoinType, concat};
+use anndata::data::{DataFrameIndex, SelectInfoElem};
 use anndata::{data::CsrNonCanonical, *};
 use data::ArrayConvert;
 use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use ndarray::Array2;
+use polars::df;
 use proptest::prelude::*;
 
 pub fn test_basic<B: Backend>() {
@@ -155,6 +158,56 @@ where
             prop_assert_eq!(adata.obsm().get_item::<ArrayData>("test2").unwrap().unwrap(), x);
         }
     });
+}
+
+/// Dataframes stored in obsm/varm must be indexed by the obs/var names, as
+/// polars dataframes carry no index of their own.
+pub fn test_dataframe_index_set_before<B: Backend>() {
+    fn index_on_disk<B: Backend>(path: &std::path::Path, key: &str) -> DataFrameIndex {
+        let store = B::open(path).unwrap();
+        let container = DataContainer::<B>::open(&store.open_group("obsm").unwrap(), key).unwrap();
+        let index = DataFrameElem::<B>::try_from(container)
+            .unwrap()
+            .inner()
+            .index
+            .clone();
+        index
+    }
+
+    with_tmp_dir(|dir| {
+        let names: DataFrameIndex = ["a", "b", "c"].iter().map(|x| x.to_string()).collect();
+        let df = df!("x" => [1i32, 2, 3]).unwrap();
+
+        // Names known before the dataframe is written
+        let path = dir.join("before");
+        let adata = AnnData::<B>::new(&path).unwrap();
+        adata.set_obs_names(names.clone()).unwrap();
+        adata.obsm().add("df", df.clone()).unwrap();
+        adata.close().unwrap();
+        assert_eq!(index_on_disk::<B>(&path, "df"), names);
+
+        // Names set after the dataframe is written
+        let path = dir.join("after");
+        let adata = AnnData::<B>::new(&path).unwrap();
+        adata.obsm().add("df", df.clone()).unwrap();
+        adata.set_obs_names(names.clone()).unwrap();
+        adata.close().unwrap();
+        assert_eq!(index_on_disk::<B>(&path, "df"), names);
+
+        // Subsetting keeps the index in sync
+        let path = dir.join("subset");
+        let adata = AnnData::<B>::new(&path).unwrap();
+        adata.set_obs_names(names.clone()).unwrap();
+        adata.obsm().add("df", df).unwrap();
+        adata
+            .subset([SelectInfoElem::from(vec![0, 2]), SelectInfoElem::full()])
+            .unwrap();
+        adata.close().unwrap();
+        assert_eq!(
+            index_on_disk::<B>(&path, "df").into_vec(),
+            ["a", "c"].map(String::from)
+        );
+    })
 }
 
 pub fn test_concat<B: Backend>() {
