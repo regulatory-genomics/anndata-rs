@@ -1075,24 +1075,22 @@ where
                 self.current_array += 1;
                 self.next()
             }
+        } else if self.current_position == 0 {
+            // return an empty array
+            self.current_position = 1;
+            Some((
+                self.arrays[0]
+                    .elem
+                    .inner()
+                    .data()
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                0,
+                0,
+            ))
         } else {
-            if self.current_position == 0 {
-                // return an empty array
-                self.current_position = 1;
-                Some((
-                    self.arrays[0]
-                        .elem
-                        .inner()
-                        .data()
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                    0,
-                    0,
-                ))
-            } else {
-                None
-            }
+            None
         }
     }
 }
