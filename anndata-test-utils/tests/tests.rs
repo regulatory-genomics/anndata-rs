@@ -24,6 +24,12 @@ fn test_complex_dataframe() {
 }
 
 #[test]
+fn test_dataframe_index() {
+    utils::test_dataframe_index::<H5>();
+    utils::test_dataframe_index::<Zarr>();
+}
+
+#[test]
 fn test_save() {
     utils::test_save::<H5>();
     utils::test_save::<Zarr>();

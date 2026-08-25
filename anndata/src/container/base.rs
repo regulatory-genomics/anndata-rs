@@ -245,9 +245,11 @@ impl<B: Backend> InnerDataFrameElem<B> {
     where
         S: AsRef<SelectInfoElem>,
     {
+        // Select before touching the index: reading the dataframe takes its
+        // height from the index stored in the container.
+        let df = self.select(selection)?;
         self.index = self.index.select(selection[0].as_ref());
         self.index.overwrite(&mut self.container)?;
-        let df = self.select(selection)?;
         self.save(df)
     }
 
@@ -447,6 +449,19 @@ impl<B: Backend> InnerArrayElem<B> {
         self.shape = data.shape();
         if self.element.is_some() {
             self.element = Some(data);
+        }
+        Ok(())
+    }
+
+    /// Set the index of a dataframe element. Other data types are left untouched,
+    /// as they do not carry an index.
+    pub(crate) fn set_index(&mut self, index: &DataFrameIndex) -> Result<()> {
+        if let DataType::DataFrame = self.dtype {
+            ensure!(
+                index.len() == self.shape[0],
+                "cannot set index as the lengths differ"
+            );
+            index.overwrite(&mut self.container)?;
         }
         Ok(())
     }
@@ -1060,24 +1075,22 @@ where
                 self.current_array += 1;
                 self.next()
             }
+        } else if self.current_position == 0 {
+            // return an empty array
+            self.current_position = 1;
+            Some((
+                self.arrays[0]
+                    .elem
+                    .inner()
+                    .data()
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                0,
+                0,
+            ))
         } else {
-            if self.current_position == 0 {
-                // return an empty array
-                self.current_position = 1;
-                Some((
-                    self.arrays[0]
-                        .elem
-                        .inner()
-                        .data()
-                        .unwrap()
-                        .try_into()
-                        .unwrap(),
-                    0,
-                    0,
-                ))
-            } else {
-                None
-            }
+            None
         }
     }
 }

@@ -21,15 +21,13 @@ use std::{
 pub(crate) fn get_backend<P: AsRef<Path>>(filename: P, backend: Option<&str>) -> &str {
     if let Some(backend) = backend {
         backend
-    } else {
-        if let Some(ext) = filename.as_ref().extension() {
-            match ext.to_str().unwrap() {
-                "h5ad" | "h5" | "h5ads" => H5::NAME,
-                _ => H5::NAME,
-            }
-        } else {
-            H5::NAME
+    } else if let Some(ext) = filename.as_ref().extension() {
+        match ext.to_str().unwrap() {
+            "h5ad" | "h5" | "h5ads" => H5::NAME,
+            _ => H5::NAME,
         }
+    } else {
+        H5::NAME
     }
 }
 

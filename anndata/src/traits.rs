@@ -581,6 +581,12 @@ impl<B: Backend> AnnDataOp for AnnData<B> {
         } else {
             self.obs.inner().set_index(index)?;
         }
+        // Dataframes in obsm are indexed by the obs names.
+        self.obsm
+            .lock()
+            .as_mut()
+            .map(|x| x.update_index())
+            .transpose()?;
         Ok(())
     }
 
@@ -592,6 +598,11 @@ impl<B: Backend> AnnDataOp for AnnData<B> {
         } else {
             self.var.inner().set_index(index)?;
         }
+        self.varm
+            .lock()
+            .as_mut()
+            .map(|x| x.update_index())
+            .transpose()?;
         Ok(())
     }
 
